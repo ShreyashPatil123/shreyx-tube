@@ -34,7 +34,8 @@ class TubePlayerService {
     _playerChannel.setMethodCallHandler(_handleNativeMethodCall);
   }
 
-  static const MethodChannel _playerChannel = MethodChannel('com.shreyx.tube/player_channel');
+  static const MethodChannel _playerChannel =
+      MethodChannel('com.shreyx.tube/player_channel');
 
   final _progressController = StreamController<PlaybackProgress>.broadcast();
   Stream<PlaybackProgress> get progressStream => _progressController.stream;
@@ -45,8 +46,10 @@ class TubePlayerService {
   final _stateController = StreamController<String>.broadcast();
   Stream<String> get stateStream => _stateController.stream;
 
-  final _videoSizeController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get videoSizeStream => _videoSizeController.stream;
+  final _videoSizeController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get videoSizeStream =>
+      _videoSizeController.stream;
 
   final _errorController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get errorStream => _errorController.stream;
@@ -64,7 +67,9 @@ class TubePlayerService {
         autoPlay: autoPlay,
       );
       if (title != null && title.isNotEmpty) params['title'] = title;
-      if (channelTitle != null && channelTitle.isNotEmpty) params['channelTitle'] = channelTitle;
+      if (channelTitle != null && channelTitle.isNotEmpty) {
+        params['channelTitle'] = channelTitle;
+      }
       final res = await _playerChannel.invokeMethod('loadMedia', params);
       return res is Map && res['ok'] == true;
     } catch (e) {
@@ -85,9 +90,22 @@ class TubePlayerService {
     } catch (_) {}
   }
 
+  Future<void> stop() async {
+    try {
+      await _playerChannel.invokeMethod('stop');
+    } catch (_) {}
+  }
+
+  Future<void> seekToLive() async {
+    try {
+      await _playerChannel.invokeMethod('seekToLive');
+    } catch (_) {}
+  }
+
   Future<void> seekTo(Duration position) async {
     try {
-      await _playerChannel.invokeMethod('seekTo', {'positionMs': position.inMilliseconds});
+      await _playerChannel
+          .invokeMethod('seekTo', {'positionMs': position.inMilliseconds});
     } catch (_) {}
   }
 
@@ -129,7 +147,8 @@ class TubePlayerService {
 
       case 'onPlaybackStateChanged':
         if (call.arguments is Map) {
-          final state = (call.arguments as Map)['state']?.toString() ?? 'UNKNOWN';
+          final state =
+              (call.arguments as Map)['state']?.toString() ?? 'UNKNOWN';
           _stateController.add(state);
         }
         break;
@@ -142,14 +161,17 @@ class TubePlayerService {
 
       case 'onVideoSizeChanged':
         if (call.arguments is Map) {
-          _videoSizeController.add(Map<String, dynamic>.from(call.arguments as Map));
+          _videoSizeController
+              .add(Map<String, dynamic>.from(call.arguments as Map));
         }
         break;
 
       case 'onPlaybackError':
         if (call.arguments is Map) {
-          debugPrint('[TubePlayerService] Native Media3 error reported: ${call.arguments}');
-          _errorController.add(Map<String, dynamic>.from(call.arguments as Map));
+          debugPrint(
+              '[TubePlayerService] Native Media3 error reported: ${call.arguments}');
+          _errorController
+              .add(Map<String, dynamic>.from(call.arguments as Map));
         }
         break;
     }

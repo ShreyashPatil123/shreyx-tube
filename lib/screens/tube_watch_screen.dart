@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -27,8 +28,39 @@ class TubeWatchScreen extends StatefulWidget {
 
 class _TubeWatchScreenState extends State<TubeWatchScreen> {
   bool _showControls = true;
+  Timer? _controlsTimer;
   bool _isDescriptionExpanded = false;
   int _activeTab = 0; // 0 = Up Next / Related, 1 = Queue
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleControlsHide();
+  }
+
+  void _scheduleControlsHide() {
+    _controlsTimer?.cancel();
+    _controlsTimer = Timer(const Duration(seconds: 4), () {
+      if (!mounted) return;
+      final player = context.read<TubePlayerProvider>();
+      if (player.isPlaying) {
+        setState(() => _showControls = false);
+      } else {
+        _scheduleControlsHide();
+      }
+    });
+  }
+
+  void _toggleControls() {
+    setState(() => _showControls = !_showControls);
+    if (_showControls) _scheduleControlsHide();
+  }
+
+  @override
+  void dispose() {
+    _controlsTimer?.cancel();
+    super.dispose();
+  }
 
   String _formatDuration(Duration d) {
     final mins = d.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -49,7 +81,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
       return const Scaffold(
         backgroundColor: TubeTheme.background,
         body: Center(
-          child: Text('No media active', style: TextStyle(color: TubeTheme.textTertiary)),
+          child: Text('No media active',
+              style: TextStyle(color: TubeTheme.textTertiary)),
         ),
       );
     }
@@ -57,8 +90,10 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
     final title = resolved?.title ?? video?.title ?? 'YouTube Video';
     final channel = resolved?.uploader ?? video?.channelTitle ?? 'Channel';
     final channelId = video?.channelId ?? '';
-    final views = video?.formattedViews.isNotEmpty == true ? video!.formattedViews : '';
-    final uploaded = video?.formattedDate.isNotEmpty == true ? video!.formattedDate : '';
+    final views =
+        video?.formattedViews.isNotEmpty == true ? video!.formattedViews : '';
+    final uploaded =
+        video?.formattedDate.isNotEmpty == true ? video!.formattedDate : '';
 
     return Scaffold(
       backgroundColor: TubeTheme.background,
@@ -69,7 +104,13 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
           children: [
             // 1. VIDEO PLAYER CONTAINER (16:9 or Fullscreen)
             AspectRatio(
-              aspectRatio: provider.aspectRatio > 0 ? provider.aspectRatio : 16 / 9,
+              aspectRatio: provider.isFullscreen
+                  ? MediaQuery.sizeOf(context).aspectRatio
+                  : (provider.aspectRatio > 0 ? provider.aspectRatio : 16 / 9)
+                      .clamp(
+                          MediaQuery.sizeOf(context).width /
+                              (MediaQuery.sizeOf(context).height * 0.55),
+                          3.0),
               child: Container(
                 color: Colors.black,
                 child: Stack(
@@ -77,10 +118,12 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                   children: [
                     // Native Media3 Surface with Gestures
                     TubePlayerGestures(
-                      onSingleTap: () => setState(() => _showControls = !_showControls),
+                      onSingleTap: _toggleControls,
                       onDoubleTapLeft: () => provider.seekRelative(-10),
                       onDoubleTapRight: () => provider.seekRelative(10),
-                      child: const TubeNativePlayerView(),
+                      child: provider.isMembersOnly
+                          ? const SizedBox.shrink()
+                          : const TubeNativePlayerView(),
                     ),
 
                     // Captions Overlay
@@ -92,45 +135,52 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                         fit: StackFit.expand,
                         children: [
                           TubeNetworkImage(
-                            imageUrl: video?.thumbnailUrl ?? resolved?.thumbnailUrl ?? '',
+                            imageUrl: video?.thumbnailUrl ??
+                                resolved?.thumbnailUrl ??
+                                '',
                             fit: BoxFit.cover,
                           ),
-                          Container(
-                            color: Colors.black54,
-                            child: Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const CircularProgressIndicator(
-                                    color: TubeTheme.progressRed,
-                                    strokeWidth: 3,
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: Colors.black87,
-                                      borderRadius: BorderRadius.circular(16),
-                                      border: Border.all(color: Colors.white24, width: 0.8),
+                          if (provider.isLoading)
+                            Container(
+                              color: Colors.black54,
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const CircularProgressIndicator(
+                                      color: TubeTheme.progressRed,
+                                      strokeWidth: 3,
                                     ),
-                                    child: Text(
-                                      _getLoadingStatusText(provider.status),
-                                      style: const TextStyle(
-                                        color: TubeTheme.textPrimary,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
+                                    const SizedBox(height: 14),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 14, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black87,
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(
+                                            color: Colors.white24, width: 0.8),
+                                      ),
+                                      child: Text(
+                                        _getLoadingStatusText(provider.status),
+                                        style: const TextStyle(
+                                          color: TubeTheme.textPrimary,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
                         ],
                       ),
 
                     // Non-Destructive Buffering HUD
-                    if (provider.isBuffering && !provider.isLoading)
+                    if (provider.isBuffering &&
+                        !provider.isLoading &&
+                        !provider.isMembersOnly)
                       const Center(
                         child: CircularProgressIndicator(
                           color: TubeTheme.progressRed,
@@ -139,22 +189,29 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                       ),
 
                     // Error HUD with Retry button
-                    if (provider.status == TubePlayerStatus.error ||
-                        (provider.errorMessage != null && !provider.isRetrying))
+                    if (!provider.isMembersOnly &&
+                        (provider.status == TubePlayerStatus.error ||
+                            (provider.errorMessage != null &&
+                                !provider.isRetrying)))
                       Container(
                         color: Colors.black87,
                         child: Center(
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.error_outline, color: TubeTheme.error, size: 40),
+                              const Icon(Icons.error_outline,
+                                  color: TubeTheme.error, size: 40),
                               const SizedBox(height: 10),
                               Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 24.0),
                                 child: Text(
-                                  provider.errorMessage ?? 'Playback error occurred',
+                                  provider.errorMessage ??
+                                      'Playback error occurred',
                                   textAlign: TextAlign.center,
-                                  style: const TextStyle(color: TubeTheme.textSecondary, fontSize: 13),
+                                  style: const TextStyle(
+                                      color: TubeTheme.textSecondary,
+                                      fontSize: 13),
                                 ),
                               ),
                               const SizedBox(height: 14),
@@ -162,10 +219,13 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: TubeTheme.accent,
                                   foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(18)),
                                 ),
                                 icon: const Icon(Icons.refresh, size: 18),
-                                label: const Text('Retry Video', style: TextStyle(fontWeight: FontWeight.w600)),
+                                label: const Text('Retry Video',
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.w600)),
                                 onPressed: () => provider.retry(),
                               ),
                             ],
@@ -174,14 +234,61 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                       ),
 
                     // Controls Overlay
-                    if (_showControls) ...[
+                    if (provider.isMembersOnly)
+                      Container(
+                        color: Colors.black87,
+                        padding: const EdgeInsets.fromLTRB(40, 12, 16, 12),
+                        child: SingleChildScrollView(
+                            child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Text('MEMBERS ONLY',
+                                style: TextStyle(
+                                    color: TubeTheme.membersGold,
+                                    fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'This video is restricted to channel members by YouTube. '
+                              'ShreyX Tube has no Google account login, so it cannot play members-only streams.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                  color: TubeTheme.textPrimary, fontSize: 13),
+                            ),
+                            TextButton.icon(
+                              icon: const Icon(Icons.link),
+                              label: const Text('Copy Link'),
+                              onPressed: () async {
+                                await Clipboard.setData(
+                                    ClipboardData(text: video!.watchUrl));
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content:
+                                              Text('YouTube link copied')));
+                                }
+                              },
+                            ),
+                          ],
+                        )),
+                      ),
+                    if (provider.isMembersOnly)
+                      Positioned(
+                          top: 0,
+                          left: 0,
+                          child: IconButton(
+                            icon: const Icon(Icons.keyboard_arrow_down,
+                                color: Colors.white),
+                            onPressed: widget.onCollapse,
+                          )),
+                    if (_showControls && !provider.isMembersOnly) ...[
                       // Top Bar (Collapse, Title in Fullscreen, Autoplay, CC, Quality, Fullscreen)
                       Positioned(
                         top: 0,
                         left: 0,
                         right: 0,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
                           decoration: const BoxDecoration(
                             gradient: LinearGradient(
                               colors: [Colors.black87, Colors.transparent],
@@ -192,7 +299,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                           child: Row(
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 28),
+                                icon: const Icon(Icons.keyboard_arrow_down,
+                                    color: Colors.white, size: 28),
                                 onPressed: widget.onCollapse,
                                 tooltip: 'Minimize to Mini-Player',
                               ),
@@ -216,11 +324,16 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                               // Autoplay Toggle (YouTube mobile style toggle in top bar)
                               IconButton(
                                 icon: Icon(
-                                  provider.autoPlayNext ? Icons.play_circle_filled : Icons.play_circle_outline,
-                                  color: provider.autoPlayNext ? Colors.white : Colors.white54,
+                                  provider.autoPlayNext
+                                      ? Icons.play_circle_filled
+                                      : Icons.play_circle_outline,
+                                  color: provider.autoPlayNext
+                                      ? Colors.white
+                                      : Colors.white54,
                                   size: 22,
                                 ),
-                                tooltip: 'Autoplay ${provider.autoPlayNext ? "on" : "off"}',
+                                tooltip:
+                                    'Autoplay ${provider.autoPlayNext ? "on" : "off"}',
                                 onPressed: () => provider.toggleAutoPlayNext(),
                               ),
 
@@ -235,26 +348,34 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                       : Colors.white70,
                                   size: 22,
                                 ),
-                                onPressed: () => showSubtitlePickerSheet(context, provider),
+                                onPressed: () =>
+                                    showSubtitlePickerSheet(context, provider),
                                 tooltip: 'Captions',
                               ),
 
                               // Quality / Settings button
                               IconButton(
-                                icon: const Icon(Icons.settings_outlined, color: Colors.white, size: 22),
-                                onPressed: () => showQualityPickerSheet(context, provider),
-                                tooltip: 'Quality (${provider.selectedQuality})',
+                                icon: const Icon(Icons.settings_outlined,
+                                    color: Colors.white, size: 22),
+                                onPressed: () =>
+                                    showQualityPickerSheet(context, provider),
+                                tooltip:
+                                    'Quality (${provider.selectedQuality})',
                               ),
 
                               // Fullscreen Toggle
                               IconButton(
                                 icon: Icon(
-                                  provider.isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                                  provider.isFullscreen
+                                      ? Icons.fullscreen_exit
+                                      : Icons.fullscreen,
                                   color: Colors.white,
                                   size: 26,
                                 ),
                                 onPressed: () => provider.toggleFullscreen(),
-                                tooltip: provider.isFullscreen ? 'Exit Fullscreen' : 'Fullscreen',
+                                tooltip: provider.isFullscreen
+                                    ? 'Exit Fullscreen'
+                                    : 'Fullscreen',
                               ),
                             ],
                           ),
@@ -267,7 +388,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             IconButton(
-                              icon: const Icon(Icons.replay_10, color: Colors.white, size: 36),
+                              icon: const Icon(Icons.replay_10,
+                                  color: Colors.white, size: 36),
                               onPressed: () => provider.seekRelative(-10),
                               tooltip: 'Rewind 10s',
                             ),
@@ -282,7 +404,9 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                               child: IconButton(
                                 iconSize: 40,
                                 icon: Icon(
-                                  provider.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                  provider.isPlaying
+                                      ? Icons.pause_rounded
+                                      : Icons.play_arrow_rounded,
                                   color: Colors.white,
                                 ),
                                 onPressed: () => provider.togglePlayPause(),
@@ -290,7 +414,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                             ),
                             const SizedBox(width: 24),
                             IconButton(
-                              icon: const Icon(Icons.forward_10, color: Colors.white, size: 36),
+                              icon: const Icon(Icons.forward_10,
+                                  color: Colors.white, size: 36),
                               onPressed: () => provider.seekRelative(10),
                               tooltip: 'Forward 10s',
                             ),
@@ -304,7 +429,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                         left: 0,
                         right: 0,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 4),
                           decoration: const BoxDecoration(
                             gradient: LinearGradient(
                               colors: [Colors.transparent, Colors.black87],
@@ -318,48 +444,75 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                               SliderTheme(
                                 data: SliderTheme.of(context).copyWith(
                                   trackHeight: 2.5,
-                                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                                  thumbShape: const RoundSliderThumbShape(
+                                      enabledThumbRadius: 6),
+                                  overlayShape: const RoundSliderOverlayShape(
+                                      overlayRadius: 12),
                                   activeTrackColor: TubeTheme.progressRed,
                                   inactiveTrackColor: Colors.white24,
                                   thumbColor: TubeTheme.progressRed,
                                 ),
                                 child: Slider(
                                   min: 0.0,
-                                  max: provider.duration.inMilliseconds.toDouble() > 0
-                                      ? provider.duration.inMilliseconds.toDouble()
+                                  max: provider.duration.inMilliseconds
+                                              .toDouble() >
+                                          0
+                                      ? provider.duration.inMilliseconds
+                                          .toDouble()
                                       : 1.0,
-                                  value: provider.position.inMilliseconds.toDouble().clamp(
+                                  value: provider.position.inMilliseconds
+                                      .toDouble()
+                                      .clamp(
                                         0.0,
-                                        provider.duration.inMilliseconds.toDouble() > 0
-                                            ? provider.duration.inMilliseconds.toDouble()
+                                        provider.duration.inMilliseconds
+                                                    .toDouble() >
+                                                0
+                                            ? provider.duration.inMilliseconds
+                                                .toDouble()
                                             : 1.0,
                                       ),
-                                  onChanged: (val) {
-                                    provider.seek(Duration(milliseconds: val.toInt()));
-                                  },
+                                  onChanged: provider.isLive
+                                      ? null
+                                      : (val) {
+                                          provider.seek(Duration(
+                                              milliseconds: val.toInt()));
+                                        },
                                 ),
                               ),
                               Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8.0, vertical: 2.0),
                                 child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Text(
-                                      _formatDuration(provider.position),
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        color: TubeTheme.textPrimary,
-                                        fontWeight: FontWeight.w600,
+                                    if (provider.isLive)
+                                      TextButton.icon(
+                                        onPressed: provider.goLive,
+                                        icon: const Icon(Icons.circle,
+                                            color: TubeTheme.live, size: 9),
+                                        label: const Text('LIVE',
+                                            style: TextStyle(
+                                                color: Colors.white,
+                                                fontWeight: FontWeight.bold)),
+                                      )
+                                    else
+                                      Text(
+                                        _formatDuration(provider.position),
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: TubeTheme.textPrimary,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
-                                    ),
-                                    Text(
-                                      _formatDuration(provider.duration),
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        color: TubeTheme.textSecondary,
+                                    if (!provider.isLive)
+                                      Text(
+                                        _formatDuration(provider.duration),
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: TubeTheme.textSecondary,
+                                        ),
                                       ),
-                                    ),
                                   ],
                                 ),
                               ),
@@ -395,22 +548,28 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
 
                     // Quick Metadata Preview Row (views • upload date • ...more)
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 2.0),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16.0, vertical: 2.0),
                       child: GestureDetector(
-                        onTap: () => setState(() => _isDescriptionExpanded = !_isDescriptionExpanded),
+                        onTap: () => setState(() =>
+                            _isDescriptionExpanded = !_isDescriptionExpanded),
                         child: Row(
                           children: [
                             if (views.isNotEmpty)
                               Text(
                                 views,
-                                style: TubeTheme.bodySmall.copyWith(color: TubeTheme.textSecondary),
+                                style: TubeTheme.bodySmall
+                                    .copyWith(color: TubeTheme.textSecondary),
                               ),
                             if (views.isNotEmpty && uploaded.isNotEmpty)
-                              Text(' \u2022 ', style: TubeTheme.bodySmall.copyWith(color: TubeTheme.textTertiary)),
+                              Text(' \u2022 ',
+                                  style: TubeTheme.bodySmall
+                                      .copyWith(color: TubeTheme.textTertiary)),
                             if (uploaded.isNotEmpty)
                               Text(
                                 uploaded,
-                                style: TubeTheme.bodySmall.copyWith(color: TubeTheme.textSecondary),
+                                style: TubeTheme.bodySmall
+                                    .copyWith(color: TubeTheme.textSecondary),
                               ),
                             if (views.isNotEmpty || uploaded.isNotEmpty)
                               const SizedBox(width: 6),
@@ -428,7 +587,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
 
                     // Channel & Subscribe/Follow Row (Modern YouTube Pill Layout)
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16.0, vertical: 10.0),
                       child: Row(
                         children: [
                           GestureDetector(
@@ -437,20 +597,24 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (_) => TubeChannelScreen(channelId: channelId, channelTitle: channel),
+                                    builder: (_) => TubeChannelScreen(
+                                        channelId: channelId,
+                                        channelTitle: channel),
                                   ),
                                 );
                               }
                             },
-                            child: CircleAvatar(
-                              radius: 18,
-                              backgroundColor: TubeTheme.surfaceVariant,
-                              child: Text(
-                                channel.isNotEmpty ? channel[0].toUpperCase() : 'C',
-                                style: const TextStyle(
-                                  color: TubeTheme.textPrimary,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14,
+                            child: ClipOval(
+                              child: TubeNetworkImage(
+                                imageUrl: video?.channelAvatarUrl ?? '',
+                                width: 36,
+                                height: 36,
+                                fit: BoxFit.cover,
+                                errorWidget: const CircleAvatar(
+                                  radius: 18,
+                                  backgroundColor: TubeTheme.surfaceVariant,
+                                  child: Icon(Icons.person,
+                                      color: TubeTheme.textSecondary),
                                 ),
                               ),
                             ),
@@ -463,7 +627,9 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) => TubeChannelScreen(channelId: channelId, channelTitle: channel),
+                                      builder: (_) => TubeChannelScreen(
+                                          channelId: channelId,
+                                          channelTitle: channel),
                                     ),
                                   );
                                 }
@@ -481,14 +647,6 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                       color: TubeTheme.textPrimary,
                                     ),
                                   ),
-                                  const SizedBox(height: 1),
-                                  const Text(
-                                    'Public Channel',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: TubeTheme.textTertiary,
-                                    ),
-                                  ),
                                 ],
                               ),
                             ),
@@ -498,24 +656,32 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                             onTap: () => provider.toggleFollowChannel(),
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 200),
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 8),
                               decoration: BoxDecoration(
-                                color: provider.isChannelFollowed ? TubeTheme.surfaceVariant : Colors.white,
+                                color: provider.isChannelFollowed
+                                    ? TubeTheme.surfaceVariant
+                                    : Colors.white,
                                 borderRadius: BorderRadius.circular(18),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   if (provider.isChannelFollowed) ...[
-                                    const Icon(Icons.check, size: 14, color: Colors.white),
+                                    const Icon(Icons.check,
+                                        size: 14, color: Colors.white),
                                     const SizedBox(width: 4),
                                   ],
                                   Text(
-                                    provider.isChannelFollowed ? 'Following' : 'Follow',
+                                    provider.isChannelFollowed
+                                        ? 'Following'
+                                        : 'Follow',
                                     style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
-                                      color: provider.isChannelFollowed ? Colors.white : Colors.black,
+                                      color: provider.isChannelFollowed
+                                          ? Colors.white
+                                          : Colors.black,
                                     ),
                                   ),
                                 ],
@@ -529,12 +695,15 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                     // Action Buttons Row (Like, Watch Later, Share, Download, Save, PiP)
                     SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 4),
                       child: Row(
                         children: [
                           // Like Pill
                           _ActionPill(
-                            icon: provider.isLikedLocally ? Icons.thumb_up : Icons.thumb_up_outlined,
+                            icon: provider.isLikedLocally
+                                ? Icons.thumb_up
+                                : Icons.thumb_up_outlined,
                             label: provider.isLikedLocally ? 'Liked' : 'Like',
                             isSelected: provider.isLikedLocally,
                             onTap: () => provider.toggleLocalLike(),
@@ -563,7 +732,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                             label: 'Share',
                             isSelected: false,
                             onTap: () {
-                              final url = 'https://www.youtube.com/watch?v=${resolved?.videoId ?? video?.id}';
+                              final url =
+                                  'https://www.youtube.com/watch?v=${resolved?.videoId ?? video?.id}';
                               Clipboard.setData(ClipboardData(text: url));
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
@@ -576,15 +746,19 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                           const SizedBox(width: 8),
 
                           // Offline Download Pill
-                          if (video != null)
+                          if (video != null &&
+                              !provider.isMembersOnly &&
+                              !provider.isLive)
                             _ActionPill(
                               icon: TubeDownloadService().isDownloaded(video.id)
                                   ? Icons.download_done
                                   : Icons.download_outlined,
-                              label: TubeDownloadService().isDownloaded(video.id)
-                                  ? 'Downloaded'
-                                  : 'Download',
-                              isSelected: TubeDownloadService().isDownloaded(video.id),
+                              label:
+                                  TubeDownloadService().isDownloaded(video.id)
+                                      ? 'Downloaded'
+                                      : 'Download',
+                              isSelected:
+                                  TubeDownloadService().isDownloaded(video.id),
                               onTap: () async {
                                 final currentStream = provider.currentStream;
                                 if (currentStream != null) {
@@ -595,14 +769,18 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                   if (context.mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
-                                        backgroundColor: TubeTheme.surfaceVariant,
-                                        content: Text('Downloading "${video.title}" in background...'),
+                                        backgroundColor:
+                                            TubeTheme.surfaceVariant,
+                                        content: Text(
+                                            'Downloading "${video.title}" in background...'),
                                       ),
                                     );
                                   }
                                 } else {
                                   ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Stream resolving, please wait...')),
+                                    const SnackBar(
+                                        content: Text(
+                                            'Stream resolving, please wait...')),
                                   );
                                 }
                               },
@@ -611,8 +789,12 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
 
                           // Watch Later Pill
                           _ActionPill(
-                            icon: provider.isInWatchLater ? Icons.bookmark : Icons.bookmark_border,
-                            label: provider.isInWatchLater ? 'Saved' : 'Watch Later',
+                            icon: provider.isInWatchLater
+                                ? Icons.bookmark
+                                : Icons.bookmark_border,
+                            label: provider.isInWatchLater
+                                ? 'Saved'
+                                : 'Watch Later',
                             isSelected: provider.isInWatchLater,
                             onTap: () => provider.toggleWatchLater(),
                           ),
@@ -624,17 +806,19 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                               icon: Icons.playlist_add,
                               label: 'Save',
                               isSelected: false,
-                              onTap: () => showAddToPlaylistSheet(context, video),
+                              onTap: () =>
+                                  showAddToPlaylistSheet(context, video),
                             ),
                           const SizedBox(width: 8),
 
                           // Enter PiP Pill
-                          _ActionPill(
-                            icon: Icons.picture_in_picture_alt,
-                            label: 'PiP',
-                            isSelected: false,
-                            onTap: () => provider.enterPip(),
-                          ),
+                          if (!provider.isMembersOnly)
+                            _ActionPill(
+                              icon: Icons.picture_in_picture_alt,
+                              label: 'PiP',
+                              isSelected: false,
+                              onTap: () => provider.enterPip(),
+                            ),
                         ],
                       ),
                     ),
@@ -642,9 +826,11 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                     // Expandable YouTube-style Description Container
                     if (video?.description.isNotEmpty == true)
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16.0, vertical: 10.0),
                         child: GestureDetector(
-                          onTap: () => setState(() => _isDescriptionExpanded = !_isDescriptionExpanded),
+                          onTap: () => setState(() =>
+                              _isDescriptionExpanded = !_isDescriptionExpanded),
                           child: Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
@@ -666,7 +852,9 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                     ),
                                     const Spacer(),
                                     Icon(
-                                      _isDescriptionExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                                      _isDescriptionExpanded
+                                          ? Icons.keyboard_arrow_up
+                                          : Icons.keyboard_arrow_down,
                                       size: 20,
                                       color: TubeTheme.textSecondary,
                                     ),
@@ -685,7 +873,9 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
-                                  _isDescriptionExpanded ? 'Show less' : '...more',
+                                  _isDescriptionExpanded
+                                      ? 'Show less'
+                                      : '...more',
                                   style: const TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
@@ -708,7 +898,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                           GestureDetector(
                             onTap: () => setState(() => _activeTab = 0),
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 7),
                               decoration: _activeTab == 0
                                   ? TubeTheme.chipSelected
                                   : TubeTheme.chipUnselected,
@@ -717,7 +908,9 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
-                                  color: _activeTab == 0 ? Colors.black : TubeTheme.textPrimary,
+                                  color: _activeTab == 0
+                                      ? Colors.black
+                                      : TubeTheme.textPrimary,
                                 ),
                               ),
                             ),
@@ -726,7 +919,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                           GestureDetector(
                             onTap: () => setState(() => _activeTab = 1),
                             child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 7),
                               decoration: _activeTab == 1
                                   ? TubeTheme.chipSelected
                                   : TubeTheme.chipUnselected,
@@ -735,7 +929,9 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
-                                  color: _activeTab == 1 ? Colors.black : TubeTheme.textPrimary,
+                                  color: _activeTab == 1
+                                      ? Colors.black
+                                      : TubeTheme.textPrimary,
                                 ),
                               ),
                             ),
@@ -752,18 +948,21 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                         const Padding(
                           padding: EdgeInsets.all(32.0),
                           child: Center(
-                            child: CircularProgressIndicator(color: TubeTheme.progressRed, strokeWidth: 2),
+                            child: CircularProgressIndicator(
+                                color: TubeTheme.progressRed, strokeWidth: 2),
                           ),
                         )
                       else if (provider.relatedVideos.isEmpty)
                         const Padding(
-                          padding: EdgeInsets.all(24.0),
-                          child: Center(
-                            child: Text('No related videos found.', style: TextStyle(color: TubeTheme.textTertiary)),
-                          )
-                        )
+                            padding: EdgeInsets.all(24.0),
+                            child: Center(
+                              child: Text('No related videos found.',
+                                  style:
+                                      TextStyle(color: TubeTheme.textTertiary)),
+                            ))
                       else
-                        ...provider.relatedVideos.map((r) => TubeVideoCard(video: r, isCompact: true)),
+                        ...provider.relatedVideos.map(
+                            (r) => TubeVideoCard(video: r, isCompact: true)),
                     ] else ...[
                       if (provider.queue.isEmpty)
                         const Padding(
@@ -789,9 +988,11 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                             final qItem = provider.queue[idx];
                             return ListTile(
                               key: ValueKey('${qItem.id}_$idx'),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 4),
                               leading: ClipRRect(
-                                borderRadius: BorderRadius.circular(TubeTheme.thumbnailRadiusCompact),
+                                borderRadius: BorderRadius.circular(
+                                    TubeTheme.thumbnailRadiusCompact),
                                 child: TubeNetworkImage(
                                   imageUrl: qItem.thumbnailUrl,
                                   width: 100,
@@ -803,7 +1004,8 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                 qItem.title,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
-                                style: TubeTheme.titleMedium.copyWith(fontSize: 13),
+                                style: TubeTheme.titleMedium
+                                    .copyWith(fontSize: 13),
                               ),
                               subtitle: Text(
                                 qItem.channelTitle,
@@ -813,14 +1015,20 @@ class _TubeWatchScreenState extends State<TubeWatchScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   IconButton(
-                                    icon: const Icon(Icons.close, color: TubeTheme.textTertiary, size: 20),
-                                    onPressed: () => provider.removeFromQueue(idx),
+                                    icon: const Icon(Icons.close,
+                                        color: TubeTheme.textTertiary,
+                                        size: 20),
+                                    onPressed: () =>
+                                        provider.removeFromQueue(idx),
                                   ),
                                   ReorderableDragStartListener(
                                     index: idx,
                                     child: const Padding(
-                                      padding: EdgeInsets.symmetric(horizontal: 4.0),
-                                      child: Icon(Icons.drag_handle, color: TubeTheme.textTertiary, size: 20),
+                                      padding:
+                                          EdgeInsets.symmetric(horizontal: 4.0),
+                                      child: Icon(Icons.drag_handle,
+                                          color: TubeTheme.textTertiary,
+                                          size: 20),
                                     ),
                                   ),
                                 ],

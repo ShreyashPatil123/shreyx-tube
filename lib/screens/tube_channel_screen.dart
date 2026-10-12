@@ -29,7 +29,8 @@ class TubeChannelScreen extends StatefulWidget {
   State<TubeChannelScreen> createState() => _TubeChannelScreenState();
 }
 
-class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTickerProviderStateMixin {
+class _TubeChannelScreenState extends State<TubeChannelScreen>
+    with SingleTickerProviderStateMixin {
   final TubeChannelService _channelService = TubeChannelService();
   final TubeStorageService _storageService = TubeStorageService();
 
@@ -49,6 +50,7 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
   final ScrollController _videosScrollController = ScrollController();
   bool _isLoadingMoreVideos = false;
   bool _hasMoreVideos = true;
+  bool _loadFailed = false;
 
   @override
   void initState() {
@@ -61,7 +63,9 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
       if (_videosScrollController.hasClients) {
         final maxScroll = _videosScrollController.position.maxScrollExtent;
         final currentScroll = _videosScrollController.position.pixels;
-        if (currentScroll >= maxScroll - 400 && !_isLoadingMoreVideos && _hasMoreVideos) {
+        if (currentScroll >= maxScroll - 400 &&
+            !_isLoadingMoreVideos &&
+            _hasMoreVideos) {
           _loadMoreVideos();
         }
       }
@@ -79,29 +83,42 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
     setState(() => _isLoading = true);
 
     final infoFuture = _channelService.getChannel(widget.channelId);
-    final videosFuture = _channelService.getChannelVideos(widget.channelId, sort: _currentSort);
+    final videosFuture =
+        _channelService.getChannelVideos(widget.channelId, sort: _currentSort);
     final shortsFuture = _channelService.getChannelShorts(widget.channelId);
     final liveFuture = _channelService.getChannelLiveStreams(widget.channelId);
-    final playlistsFuture = _channelService.getChannelPlaylists(widget.channelId);
+    final playlistsFuture =
+        _channelService.getChannelPlaylists(widget.channelId);
 
-    final results = await Future.wait([
-      infoFuture,
-      videosFuture,
-      shortsFuture,
-      liveFuture,
-      playlistsFuture,
-    ]);
+    try {
+      final results = await Future.wait([
+        infoFuture,
+        videosFuture,
+        shortsFuture,
+        liveFuture,
+        playlistsFuture,
+      ]);
 
-    if (mounted) {
-      setState(() {
-        _channelInfo = results[0] as TubeChannelInfo;
-        _videos = results[1] as List<TubeChannelVideo>;
-        _shorts = results[2] as List<TubeChannelShort>;
-        _liveStreams = results[3] as List<TubeChannelLive>;
-        _playlists = results[4] as List<TubeChannelPlaylist>;
-        _isLoading = false;
-        _isFollowed = _storageService.isChannelFollowed(widget.channelId);
-      });
+      if (mounted) {
+        setState(() {
+          _channelInfo = results[0] as TubeChannelInfo;
+          _videos = results[1] as List<TubeChannelVideo>;
+          _shorts = results[2] as List<TubeChannelShort>;
+          _liveStreams = results[3] as List<TubeChannelLive>;
+          _playlists = results[4] as List<TubeChannelPlaylist>;
+          _isLoading = false;
+          _loadFailed = false;
+          _hasMoreVideos = _channelService.hasMoreVideos(widget.channelId);
+          _isFollowed = _storageService.isChannelFollowed(widget.channelId);
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _loadFailed = true;
+        });
+      }
     }
   }
 
@@ -112,22 +129,36 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
       _isLoading = true;
     });
 
-    final sorted = await _channelService.getChannelVideos(widget.channelId, sort: newSort);
-    if (mounted) {
-      setState(() {
-        _videos = sorted;
-        _isLoading = false;
-        _hasMoreVideos = _channelService.hasMoreVideos(widget.channelId);
-      });
+    try {
+      final sorted = await _channelService.getChannelVideos(widget.channelId,
+          sort: newSort);
+      if (mounted) {
+        setState(() {
+          _videos = sorted;
+          _isLoading = false;
+          _hasMoreVideos = _channelService.hasMoreVideos(widget.channelId);
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _loadFailed = true;
+        });
+      }
     }
   }
 
   Future<void> _loadMoreVideos() async {
     if (_isLoadingMoreVideos || !_hasMoreVideos) return;
-    setState(() => _isLoadingMoreVideos = true);
+    setState(() {
+      _isLoadingMoreVideos = true;
+      _loadFailed = false;
+    });
 
     try {
-      final more = await _channelService.loadMoreChannelVideos(widget.channelId, sort: _currentSort);
+      final more = await _channelService.loadMoreChannelVideos(widget.channelId,
+          sort: _currentSort);
       if (mounted) {
         setState(() {
           _videos = more;
@@ -137,7 +168,10 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
       }
     } catch (_) {
       if (mounted) {
-        setState(() => _isLoadingMoreVideos = false);
+        setState(() {
+          _isLoadingMoreVideos = false;
+          _loadFailed = true;
+        });
       }
     }
   }
@@ -160,65 +194,11 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: TubeTheme.surfaceVariant,
-          content: Text(nowFollowed ? 'Added to Subscriptions' : 'Unsubscribed'),
+          content:
+              Text(nowFollowed ? 'Added to Subscriptions' : 'Unsubscribed'),
         ),
       );
     }
-  }
-
-  void _showMembersOnlyExplanation(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: TubeTheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: const BoxDecoration(
-                  color: Color(0x22FFD700),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.lock, color: TubeTheme.membersGold, size: 36),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Members-Only Content',
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'This video is available exclusively to paid channel members.\n\n'
-                'ShreyX Tube is a 100% privacy-first, accountless application. '
-                'It does not support Google sign-in, account cookies, or membership purchases.\n\n'
-                'To view this video, you must use an official client authenticated with an eligible Google account.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: TubeTheme.textSecondary, fontSize: 13, height: 1.4),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: TubeTheme.surfaceVariant,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-                  ),
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Understood'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   void _showAboutDialog(BuildContext context) {
@@ -226,26 +206,38 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: TubeTheme.surface,
-        title: Text(_channelInfo?.title ?? widget.channelTitle, style: const TextStyle(color: Colors.white)),
+        title: Text(_channelInfo?.title ?? widget.channelTitle,
+            style: const TextStyle(color: Colors.white)),
         content: SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               if (_channelInfo?.description.isNotEmpty == true) ...[
-                const Text('Description', style: TextStyle(color: TubeTheme.textSecondary, fontWeight: FontWeight.bold, fontSize: 13)),
+                const Text('Description',
+                    style: TextStyle(
+                        color: TubeTheme.textSecondary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13)),
                 const SizedBox(height: 6),
-                Text(_channelInfo!.description, style: const TextStyle(color: TubeTheme.textPrimary, fontSize: 13, height: 1.4)),
+                Text(_channelInfo!.description,
+                    style: const TextStyle(
+                        color: TubeTheme.textPrimary,
+                        fontSize: 13,
+                        height: 1.4)),
                 const SizedBox(height: 16),
               ],
-              Text('Channel ID: ${widget.channelId}', style: const TextStyle(color: TubeTheme.textTertiary, fontSize: 11)),
+              Text('Channel ID: ${widget.channelId}',
+                  style: const TextStyle(
+                      color: TubeTheme.textTertiary, fontSize: 11)),
             ],
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close', style: TextStyle(color: TubeTheme.accent)),
+            child:
+                const Text('Close', style: TextStyle(color: TubeTheme.accent)),
           ),
         ],
       ),
@@ -261,7 +253,8 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
       backgroundColor: TubeTheme.background,
       appBar: AppBar(
         backgroundColor: TubeTheme.background,
-        title: Text(widget.channelTitle, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        title: Text(widget.channelTitle,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         actions: [
           IconButton(
             icon: const Icon(Icons.info_outline, size: 22),
@@ -299,23 +292,34 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
                                 CircleAvatar(
                                   radius: 36,
                                   backgroundColor: TubeTheme.surfaceVariant,
-                                  backgroundImage: _channelInfo?.avatarUrl.isNotEmpty == true
+                                  backgroundImage: _channelInfo
+                                              ?.avatarUrl.isNotEmpty ==
+                                          true
                                       ? NetworkImage(_channelInfo!.avatarUrl)
                                       : null,
-                                  child: _channelInfo?.avatarUrl.isEmpty != false
-                                      ? Text(
-                                          widget.channelTitle.isNotEmpty ? widget.channelTitle[0].toUpperCase() : 'C',
-                                          style: const TextStyle(fontSize: 26, color: Colors.white, fontWeight: FontWeight.bold),
-                                        )
-                                      : null,
+                                  child:
+                                      _channelInfo?.avatarUrl.isEmpty != false
+                                          ? Text(
+                                              widget.channelTitle.isNotEmpty
+                                                  ? widget.channelTitle[0]
+                                                      .toUpperCase()
+                                                  : 'C',
+                                              style: const TextStyle(
+                                                  fontSize: 26,
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold),
+                                            )
+                                          : null,
                                 ),
                                 const SizedBox(width: 16),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        _channelInfo?.title ?? widget.channelTitle,
+                                        _channelInfo?.title ??
+                                            widget.channelTitle,
                                         style: const TextStyle(
                                           fontSize: 20,
                                           fontWeight: FontWeight.bold,
@@ -325,12 +329,16 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
                                       const SizedBox(height: 3),
                                       Text(
                                         '@${widget.channelTitle.replaceAll(RegExp(r'\s+'), '').toLowerCase()}',
-                                        style: const TextStyle(fontSize: 12, color: TubeTheme.textTertiary),
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: TubeTheme.textTertiary),
                                       ),
                                       const SizedBox(height: 3),
                                       Text(
                                         '${_videos.length} videos  •  ${_shorts.length} Shorts',
-                                        style: const TextStyle(fontSize: 12, color: TubeTheme.textSecondary),
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: TubeTheme.textSecondary),
                                       ),
                                     ],
                                   ),
@@ -339,7 +347,8 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
                             ),
 
                             // Bio Preview
-                            if (_channelInfo?.description.isNotEmpty == true) ...[
+                            if (_channelInfo?.description.isNotEmpty ==
+                                true) ...[
                               const SizedBox(height: 10),
                               GestureDetector(
                                 onTap: () => _showAboutDialog(context),
@@ -364,22 +373,29 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
                               height: 38,
                               child: ElevatedButton.icon(
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: _isFollowed ? TubeTheme.surfaceVariant : Colors.white,
-                                  foregroundColor: _isFollowed ? Colors.white : Colors.black,
+                                  backgroundColor: _isFollowed
+                                      ? TubeTheme.surfaceVariant
+                                      : Colors.white,
+                                  foregroundColor:
+                                      _isFollowed ? Colors.white : Colors.black,
                                   elevation: 0,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(19)),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(19)),
                                 ),
                                 icon: Icon(
                                   _isFollowed ? Icons.check : Icons.add,
                                   size: 18,
-                                  color: _isFollowed ? Colors.white : Colors.black,
+                                  color:
+                                      _isFollowed ? Colors.white : Colors.black,
                                 ),
                                 label: Text(
                                   _isFollowed ? 'Subscribed' : 'Subscribe',
                                   style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w600,
-                                    color: _isFollowed ? Colors.white : Colors.black,
+                                    color: _isFollowed
+                                        ? Colors.white
+                                        : Colors.black,
                                   ),
                                 ),
                                 onPressed: _toggleFollow,
@@ -395,13 +411,17 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
                         indicatorColor: TubeTheme.textPrimary,
                         labelColor: TubeTheme.textPrimary,
                         unselectedLabelColor: TubeTheme.textTertiary,
-                        labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                        unselectedLabelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.normal),
+                        labelStyle: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600),
+                        unselectedLabelStyle: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.normal),
                         isScrollable: true,
                         tabAlignment: TabAlignment.start,
                         tabs: [
                           const Tab(text: 'Home'),
-                          Tab(text: 'Videos (${_videos.length}${_hasMoreVideos ? '+' : ''})'),
+                          Tab(
+                              text:
+                                  'Videos (${_videos.length}${_hasMoreVideos ? '+' : ''})'),
                           Tab(text: 'Shorts (${_shorts.length})'),
                           Tab(text: 'Live (${_liveStreams.length})'),
                           Tab(text: 'Playlists (${_playlists.length})'),
@@ -441,7 +461,9 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
 
   Widget _buildHomeTab(TubePlayerProvider player) {
     if (_videos.isEmpty) {
-      return const Center(child: Text('No videos available.', style: TextStyle(color: TubeTheme.textTertiary)));
+      return const Center(
+          child: Text('No videos available.',
+              style: TextStyle(color: TubeTheme.textTertiary)));
     }
 
     final featured = _videos.first.item;
@@ -456,13 +478,13 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
         ),
         TubeVideoCard(video: featured),
         const Divider(color: TubeTheme.divider, height: 16),
-
         if (otherUploads.isNotEmpty) ...[
           const Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: Text('Recent Videos', style: TubeTheme.sectionTitle),
           ),
-          ...otherUploads.map((v) => TubeVideoCard(video: v.item, isCompact: true)),
+          ...otherUploads
+              .map((v) => TubeVideoCard(video: v.item, isCompact: true)),
         ],
       ],
     );
@@ -471,6 +493,15 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
   Widget _buildVideosTab(TubePlayerProvider player) {
     return Column(
       children: [
+        if (_loadFailed)
+          TextButton(
+            onPressed: _videos.isEmpty ? _loadAllChannelData : _loadMoreVideos,
+            child: const Text('Could not load uploads. Tap to retry.'),
+          ),
+        if (_hasMoreVideos && !_isLoadingMoreVideos && !_loadFailed)
+          TextButton(
+              onPressed: _loadMoreVideos,
+              child: const Text('Load more uploads')),
         // Sorting Chip Bar (Latest, Popular, Oldest)
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -487,12 +518,15 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
         ),
         Expanded(
           child: _videos.isEmpty
-              ? const Center(child: Text('No videos uploaded.', style: TextStyle(color: TubeTheme.textTertiary)))
+              ? const Center(
+                  child: Text('No videos uploaded.',
+                      style: TextStyle(color: TubeTheme.textTertiary)))
               : ListView.separated(
                   controller: _videosScrollController,
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   itemCount: _videos.length + (_isLoadingMoreVideos ? 1 : 0),
-                  separatorBuilder: (_, __) => const Divider(color: TubeTheme.divider, height: 1),
+                  separatorBuilder: (_, __) =>
+                      const Divider(color: TubeTheme.divider, height: 1),
                   itemBuilder: (context, idx) {
                     if (idx >= _videos.length) {
                       return Container(
@@ -501,49 +535,12 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
                         child: const SizedBox(
                           width: 24,
                           height: 24,
-                          child: CircularProgressIndicator(color: TubeTheme.accent, strokeWidth: 2),
+                          child: CircularProgressIndicator(
+                              color: TubeTheme.accent, strokeWidth: 2),
                         ),
                       );
                     }
                     final item = _videos[idx];
-                    if (item.isMembersOnly) {
-                      return ListTile(
-                        leading: Stack(
-                          children: [
-                            TubeNetworkImage(
-                              imageUrl: item.item.thumbnailUrl,
-                              width: TubeTheme.compactThumbWidth,
-                              height: TubeTheme.compactThumbHeight,
-                              fit: BoxFit.cover,
-                            ),
-                            Positioned(
-                              top: 4,
-                              right: 4,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: TubeTheme.membersGold,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: const Text(
-                                  'MEMBERS',
-                                  style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 9),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        title: Text(
-                          item.item.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TubeTheme.titleMedium,
-                        ),
-                        subtitle: const Text('Members only • Tap for info', style: TextStyle(color: TubeTheme.membersGold, fontSize: 11)),
-                        onTap: () => _showMembersOnlyExplanation(context),
-                      );
-                    }
-
                     return TubeVideoCard(video: item.item, isCompact: true);
                   },
                 ),
@@ -558,7 +555,8 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
       onTap: () => _changeVideoSort(sort),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: isSelected ? TubeTheme.chipSelected : TubeTheme.chipUnselected,
+        decoration:
+            isSelected ? TubeTheme.chipSelected : TubeTheme.chipUnselected,
         child: Text(
           label,
           style: TextStyle(
@@ -571,9 +569,12 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
     );
   }
 
-  Widget _buildShortsTab(TubeShortsController shortsCtrl, TubePlayerProvider player) {
+  Widget _buildShortsTab(
+      TubeShortsController shortsCtrl, TubePlayerProvider player) {
     if (_shorts.isEmpty) {
-      return const Center(child: Text('No Shorts uploaded by this channel.', style: TextStyle(color: TubeTheme.textTertiary)));
+      return const Center(
+          child: Text('No Shorts uploaded by this channel.',
+              style: TextStyle(color: TubeTheme.textTertiary)));
     }
 
     return GridView.builder(
@@ -639,32 +640,41 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
 
   Widget _buildLiveTab(TubePlayerProvider player) {
     if (_liveStreams.isEmpty) {
-      return const Center(child: Text('No active live streams.', style: TextStyle(color: TubeTheme.textTertiary)));
+      return const Center(
+          child: Text('No active live streams.',
+              style: TextStyle(color: TubeTheme.textTertiary)));
     }
 
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _liveStreams.length,
-      separatorBuilder: (_, __) => const Divider(color: TubeTheme.divider, height: 1),
-      itemBuilder: (context, idx) => TubeVideoCard(video: _liveStreams[idx].item, isCompact: true),
+      separatorBuilder: (_, __) =>
+          const Divider(color: TubeTheme.divider, height: 1),
+      itemBuilder: (context, idx) =>
+          TubeVideoCard(video: _liveStreams[idx].item, isCompact: true),
     );
   }
 
   Widget _buildPlaylistsTab(TubePlayerProvider player) {
     if (_playlists.isEmpty) {
-      return const Center(child: Text('No public playlists found.', style: TextStyle(color: TubeTheme.textTertiary)));
+      return const Center(
+          child: Text('No public playlists found.',
+              style: TextStyle(color: TubeTheme.textTertiary)));
     }
 
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _playlists.length,
-      separatorBuilder: (_, __) => const Divider(color: TubeTheme.divider, height: 1),
+      separatorBuilder: (_, __) =>
+          const Divider(color: TubeTheme.divider, height: 1),
       itemBuilder: (context, idx) {
         final pl = _playlists[idx];
         return ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           leading: ClipRRect(
-            borderRadius: BorderRadius.circular(TubeTheme.thumbnailRadiusCompact),
+            borderRadius:
+                BorderRadius.circular(TubeTheme.thumbnailRadiusCompact),
             child: Stack(
               children: [
                 TubeNetworkImage(
@@ -677,14 +687,18 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
                   bottom: 4,
                   right: 4,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.8),
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
                       '${pl.videoCount} videos',
-                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600),
                     ),
                   ),
                 ),
@@ -701,7 +715,8 @@ class _TubeChannelScreenState extends State<TubeChannelScreen> with SingleTicker
             '${pl.videoCount} public videos',
             style: TubeTheme.bodySmall,
           ),
-          trailing: const Icon(Icons.playlist_play, color: TubeTheme.textTertiary),
+          trailing:
+              const Icon(Icons.playlist_play, color: TubeTheme.textTertiary),
         );
       },
     );

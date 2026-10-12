@@ -69,6 +69,8 @@ class TubeShortsController extends ChangeNotifier {
 
   /// Explicitly called when user opens the Shorts tab
   void activateScreen({TubePlayerProvider? mainPlayerProvider}) {
+    // Both the tab shell and screen lifecycle can announce the same activation.
+    if (_isScreenActive) return;
     _isScreenActive = true;
     mainPlayerProvider?.pause();
     if (_shorts.isEmpty) {
@@ -233,6 +235,14 @@ class TubeShortsController extends ChangeNotifier {
       }
 
       final params = stream.toMediaParams(autoPlay: true);
+
+      _shorts[index] = short.copyWith(
+        channelTitle: resolved.uploader,
+        channelId: RegExp(r'/channel/(UC[\w-]+)')
+                .firstMatch(resolved.uploaderUrl)?.group(1) ?? short.channelId,
+        channelAvatarUrl: resolved.uploaderAvatarUrl.isNotEmpty
+            ? resolved.uploaderAvatarUrl : short.channelAvatarUrl,
+      );
 
       await _channel.invokeMethod('loadMedia', params);
       _isLoadingActiveShort = false;

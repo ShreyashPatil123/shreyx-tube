@@ -28,7 +28,8 @@ class _TubeCategoryFeedScreenState extends State<TubeCategoryFeedScreen> {
     _loadInitial();
 
     _scrollController.addListener(() {
-      if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 400) {
+      if (_scrollController.position.pixels >=
+          _scrollController.position.maxScrollExtent - 400) {
         _loadNextPage();
       }
     });
@@ -47,7 +48,8 @@ class _TubeCategoryFeedScreenState extends State<TubeCategoryFeedScreen> {
     });
 
     try {
-      final list = await _feedService.getCategoryFeed(widget.category, forceRefresh: forceRefresh);
+      final list = await _feedService.getCategoryFeed(widget.category,
+          forceRefresh: forceRefresh);
       if (mounted) {
         setState(() {
           _videos = list;
@@ -65,7 +67,9 @@ class _TubeCategoryFeedScreenState extends State<TubeCategoryFeedScreen> {
   }
 
   Future<void> _loadNextPage() async {
-    if (_isLoadingMore) return;
+    if (_isLoadingMore || _isLoading || !_feedService.hasMore(widget.category)) {
+      return;
+    }
     setState(() => _isLoadingMore = true);
 
     try {
@@ -100,16 +104,20 @@ class _TubeCategoryFeedScreenState extends State<TubeCategoryFeedScreen> {
         backgroundColor: const Color(0xFF1E1E1E),
         onRefresh: () => _loadInitial(forceRefresh: true),
         child: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: Color(0xFFE50914), strokeWidth: 3))
+            ? const Center(
+                child: CircularProgressIndicator(
+                    color: Color(0xFFE50914), strokeWidth: 3))
             : _errorMessage != null
                 ? Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(_errorMessage!, style: const TextStyle(color: Colors.white70)),
+                        Text(_errorMessage!,
+                            style: const TextStyle(color: Colors.white70)),
                         const SizedBox(height: 12),
                         ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE50914)),
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFE50914)),
                           onPressed: () => _loadInitial(forceRefresh: true),
                           child: const Text('Retry'),
                         ),
@@ -117,7 +125,9 @@ class _TubeCategoryFeedScreenState extends State<TubeCategoryFeedScreen> {
                     ),
                   )
                 : _videos.isEmpty
-                    ? const Center(child: Text('No videos found in this feed.', style: TextStyle(color: Colors.white38)))
+                    ? const Center(
+                        child: Text('No videos found in this feed.',
+                            style: TextStyle(color: Colors.white38)))
                     : ListView.separated(
                         controller: _scrollController,
                         padding: const EdgeInsets.symmetric(vertical: 8),
@@ -132,7 +142,9 @@ class _TubeCategoryFeedScreenState extends State<TubeCategoryFeedScreen> {
                                   ? const SizedBox(
                                       width: 24,
                                       height: 24,
-                                      child: CircularProgressIndicator(color: Color(0xFFE50914), strokeWidth: 2),
+                                      child: CircularProgressIndicator(
+                                          color: Color(0xFFE50914),
+                                          strokeWidth: 2),
                                     )
                                   : const SizedBox.shrink(),
                             );

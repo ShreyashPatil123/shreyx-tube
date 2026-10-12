@@ -1,11 +1,16 @@
 package com.shreyx.tube
 
 import android.app.PendingIntent
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.util.Log
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.DefaultMediaNotificationProvider
 
 /**
  * AndroidX Media3 MediaSessionService for ShreyX Tube background media playback.
@@ -22,6 +27,10 @@ class TubePlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        ensureForeground()
+        val channelId = "tube_playback"
+        setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this)
+            .setNotificationId(1001).setChannelId(channelId).build())
         Log.i(TAG, "TubePlaybackService onCreate: setting up MediaSession")
 
         val player = TubePlayerBridge.instance?.player
@@ -42,7 +51,39 @@ class TubePlaybackService : MediaSessionService() {
             Log.i(TAG, "MediaSession successfully initialized for TubePlayerBridge ExoPlayer")
         } else {
             Log.w(TAG, "TubePlayerBridge instance or player was null during service creation")
+            stopSelf()
         }
+    }
+
+    private fun ensureForeground() {
+        // Android's foreground deadline starts at startForegroundService(), even
+        // when the stream is slow, unavailable, or paused. Do not wait for READY.
+        val channelId = "tube_playback"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(channelId, "Video playback", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+        val openApp = PendingIntent.getActivity(this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, channelId)
+        } else Notification.Builder(this)
+        val notification = builder.setSmallIcon(R.drawable.ic_stat_play)
+            .setContentTitle("ShreyX Tube")
+            .setContentText("Preparing playback")
+            .setContentIntent(openApp)
+            .setCategory(Notification.CATEGORY_TRANSPORT)
+            .setOngoing(true).build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1001, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else startForeground(1001, notification)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        ensureForeground()
+        return super.onStartCommand(intent, flags, startId)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {

@@ -27,7 +27,9 @@ class _TubeMainShellState extends State<TubeMainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final provider = context.watch<TubePlayerProvider>();
+    context.select<TubePlayerProvider, (bool, bool)>(
+        (p) => (p.isPlayerVisible, p.isExpanded));
+    final provider = context.read<TubePlayerProvider>();
 
     final pages = [
       const TubeHomeScreen(),
@@ -47,9 +49,12 @@ class _TubeMainShellState extends State<TubeMainShell> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // Floating Mini-Player: displayed right above bottom navigation when player is active & collapsed
-          if (provider.isPlayerVisible && !provider.isExpanded && _currentIndex != 1)
+          if (provider.isPlayerVisible &&
+              !provider.isExpanded &&
+              _currentIndex != 1)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
               child: TubeMiniPlayer(
                 onExpand: () => provider.expandPlayer(),
               ),
@@ -63,7 +68,9 @@ class _TubeMainShellState extends State<TubeMainShell> {
               labelTextStyle: WidgetStateProperty.resolveWith((states) {
                 final isSelected = states.contains(WidgetState.selected);
                 return TextStyle(
-                  color: isSelected ? TubeTheme.textPrimary : TubeTheme.textTertiary,
+                  color: isSelected
+                      ? TubeTheme.textPrimary
+                      : TubeTheme.textTertiary,
                   fontSize: 10,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
                 );
@@ -71,7 +78,9 @@ class _TubeMainShellState extends State<TubeMainShell> {
               iconTheme: WidgetStateProperty.resolveWith((states) {
                 final isSelected = states.contains(WidgetState.selected);
                 return IconThemeData(
-                  color: isSelected ? TubeTheme.textPrimary : TubeTheme.textTertiary,
+                  color: isSelected
+                      ? TubeTheme.textPrimary
+                      : TubeTheme.textTertiary,
                   size: 24,
                 );
               }),
@@ -84,7 +93,9 @@ class _TubeMainShellState extends State<TubeMainShell> {
                   context.read<TubeShortsController>().deactivateScreen();
                 } else if (idx == 1 && _currentIndex != 1) {
                   // Switching into Shorts: activate shorts, pause normal video playback
-                  context.read<TubeShortsController>().activateScreen(mainPlayerProvider: provider);
+                  context
+                      .read<TubeShortsController>()
+                      .activateScreen(mainPlayerProvider: provider);
                 }
                 setState(() => _currentIndex = idx);
               },

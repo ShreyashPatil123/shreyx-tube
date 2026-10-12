@@ -12,15 +12,16 @@ import 'tube_channel_screen.dart';
 
 class TubeSearchScreen extends StatefulWidget {
   final String? initialQuery;
+  final TubeSearchService? searchService;
 
-  const TubeSearchScreen({super.key, this.initialQuery});
+  const TubeSearchScreen({super.key, this.initialQuery, this.searchService});
 
   @override
   State<TubeSearchScreen> createState() => _TubeSearchScreenState();
 }
 
 class _TubeSearchScreenState extends State<TubeSearchScreen> {
-  final TubeSearchService _searchService = TubeSearchService();
+  late final TubeSearchService _searchService;
   final TubeStorageService _storageService = TubeStorageService();
   late final TextEditingController _controller;
   final FocusNode _focusNode = FocusNode();
@@ -35,15 +36,20 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
   bool _hasSearched = false;
   String _activeFilter = 'All';
   TubeSearchFilters _filters = const TubeSearchFilters();
+  int _searchGeneration = 0;
+  String _submittedQuery = '';
 
   @override
   void initState() {
     super.initState();
+    _searchService = widget.searchService ?? TubeSearchService();
     _controller = TextEditingController(text: widget.initialQuery ?? '');
     _recentSearches = _storageService.getSearchHistory();
+    _focusNode.addListener(_onSearchFocusChanged);
 
     _scrollController.addListener(() {
-      if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 350) {
+      if (_scrollController.position.pixels >=
+          _scrollController.position.maxScrollExtent - 350) {
         _loadNextPage();
       }
     });
@@ -58,6 +64,7 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    _focusNode.removeListener(_onSearchFocusChanged);
     _controller.dispose();
     _focusNode.dispose();
     _scrollController.dispose();
@@ -66,6 +73,7 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
 
   void _onQueryChanged(String text) {
     _debounceTimer?.cancel();
+    setState(() {});
     if (text.trim().isEmpty) {
       setState(() {
         _suggestions = [];
@@ -79,11 +87,19 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
       final parsed = _searchService.parseInput(text);
       if (parsed.type == TubeInputType.textQuery) {
         final sugs = await _searchService.getSuggestions(text);
-        if (mounted) setState(() => _suggestions = sugs);
+        if (mounted && _controller.text == text && _focusNode.hasFocus) {
+          setState(() => _suggestions = sugs);
+        }
       } else {
         if (mounted) setState(() => _suggestions = []);
       }
     });
+  }
+
+  void _onSearchFocusChanged() {
+    if (!mounted) return;
+    setState(() {});
+    if (_focusNode.hasFocus) _onQueryChanged(_controller.text);
   }
 
   Future<void> _executeSearch(String input) async {
@@ -91,10 +107,12 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
     if (trimmed.isEmpty) return;
 
     _focusNode.unfocus();
+    _debounceTimer?.cancel();
     final parsed = _searchService.parseInput(trimmed);
 
     // 1. Direct Video / Shorts URL Detection
-    if (parsed.type == TubeInputType.videoUrl || parsed.type == TubeInputType.shortsUrl) {
+    if (parsed.type == TubeInputType.videoUrl ||
+        parsed.type == TubeInputType.shortsUrl) {
       final videoId = parsed.extractedId ?? trimmed;
       final provider = context.read<TubePlayerProvider>();
       provider.resolveAndPlay(videoId);
@@ -108,30 +126,36 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => TubeChannelScreen(channelId: channelId, channelTitle: 'Channel'),
+          builder: (_) =>
+              TubeChannelScreen(channelId: channelId, channelTitle: 'Channel'),
         ),
       );
       return;
     }
 
     // 3. Normal Text Query Search
+    final generation = ++_searchGeneration;
+    _submittedQuery = trimmed;
     setState(() {
       _isLoading = true;
+      _isLoadingMore = false;
       _hasSearched = true;
       _suggestions = [];
     });
 
     // Save to local search history
     await _storageService.addSearchQuery(trimmed);
+    if (!mounted || generation != _searchGeneration) return;
     _recentSearches = _storageService.getSearchHistory();
 
     final results = await _searchService.search(
       trimmed,
       filter: _activeFilter,
       filters: _filters,
+      forceRefresh: true,
     );
 
-    if (mounted) {
+    if (mounted && generation == _searchGeneration) {
       setState(() {
         _results = results;
         _isLoading = false;
@@ -141,21 +165,30 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
 
   Future<void> _loadNextPage() async {
     final token = _results.continuationToken;
-    if (_isLoadingMore || token == null || token.isEmpty) return;
+    if (_isLoading || _isLoadingMore || token == null || token.isEmpty) return;
+    final generation = _searchGeneration;
 
     setState(() => _isLoadingMore = true);
 
-    final moreResults = await _searchService.searchNextPage(token, filter: _activeFilter);
+    final moreResults =
+        await _searchService.searchNextPage(token, filter: _activeFilter);
 
-    if (mounted) {
+    if (mounted && generation == _searchGeneration) {
       final existingIds = _results.videos.map((v) => v.id).toSet();
-      final newVideos = moreResults.videos.where((v) => !existingIds.contains(v.id)).toList();
+      final newVideos =
+          moreResults.videos.where((v) => !existingIds.contains(v.id)).toList();
 
       setState(() {
+        final mergedVideos = [..._results.videos, ...newVideos];
         _results = _results.copyWith(
-          videos: [..._results.videos, ...newVideos],
+          videos: _filters.sortBy == 'upload_date'
+              ? TubeSearchService.latestFirst(mergedVideos)
+              : mergedVideos,
           channels: [..._results.channels, ...moreResults.channels],
-          continuationToken: moreResults.continuationToken,
+          playlists: [..._results.playlists, ...moreResults.playlists],
+          continuationToken: moreResults.continuationToken == token
+              ? null
+              : moreResults.continuationToken,
         );
         _isLoadingMore = false;
       });
@@ -176,7 +209,8 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
 
         return StatefulBuilder(
           builder: (context, setModalState) {
-            return Padding(
+            return SingleChildScrollView(
+                child: Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -187,7 +221,10 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
                     children: [
                       const Text(
                         'Search Filters',
-                        style: TextStyle(color: TubeTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            color: TubeTheme.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold),
                       ),
                       TextButton(
                         onPressed: () {
@@ -197,17 +234,63 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
                             tempSort = 'relevance';
                           });
                         },
-                        child: const Text('Reset', style: TextStyle(color: TubeTheme.accent, fontSize: 12)),
+                        child: const Text('Reset',
+                            style: TextStyle(
+                                color: TubeTheme.accent, fontSize: 12)),
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Text('Upload Date', style: TextStyle(color: TubeTheme.textSecondary, fontSize: 13, fontWeight: FontWeight.bold)),
+                  const Text('Sort by',
+                      style: TextStyle(
+                          color: TubeTheme.textSecondary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold)),
+                  Wrap(
+                    spacing: 8,
+                    children: {
+                      'relevance': 'Relevance',
+                      'upload_date': 'Upload Date (Latest)',
+                      'view_count': 'Popularity',
+                    }
+                        .entries
+                        .map((entry) => ChoiceChip(
+                              label: Text(entry.value),
+                              selected: tempSort == entry.key,
+                              onSelected: (selected) {
+                                if (selected) {
+                                  setModalState(() {
+                                    tempSort = entry.key;
+                                    if (tempSort == 'upload_date' &&
+                                        tempUpload == 'any') {
+                                      tempUpload = 'today';
+                                    }
+                                  });
+                                }
+                              },
+                            ))
+                        .toList(),
+                  ),
+                  const SizedBox(height: 12),
+                  if (tempSort == 'upload_date')
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 12),
+                      child: Text(
+                          'Latest orders results within the selected upload period. Any Time uses Today.',
+                          style: TextStyle(
+                              color: TubeTheme.textSecondary, fontSize: 12)),
+                    ),
+                  const Text('Upload Date',
+                      style: TextStyle(
+                          color: TubeTheme.textSecondary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 8,
                     children: [
                       {'label': 'Any Time', 'val': 'any'},
+                      {'label': 'Last Hour', 'val': 'hour'},
                       {'label': 'Today', 'val': 'today'},
                       {'label': 'This Week', 'val': 'week'},
                       {'label': 'This Month', 'val': 'month'},
@@ -219,24 +302,34 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
                         selected: sel,
                         selectedColor: TubeTheme.textPrimary,
                         backgroundColor: TubeTheme.surfaceVariant,
-                        labelStyle: TextStyle(color: sel ? TubeTheme.background : TubeTheme.textPrimary, fontSize: 11),
+                        labelStyle: TextStyle(
+                            color: sel
+                                ? TubeTheme.background
+                                : TubeTheme.textPrimary,
+                            fontSize: 11),
                         side: BorderSide.none,
                         showCheckmark: false,
                         onSelected: (val) {
-                          if (val) setModalState(() => tempUpload = item['val']!);
+                          if (val) {
+                            setModalState(() => tempUpload = item['val']!);
+                          }
                         },
                       );
                     }).toList(),
                   ),
                   const SizedBox(height: 12),
-                  const Text('Duration', style: TextStyle(color: TubeTheme.textSecondary, fontSize: 13, fontWeight: FontWeight.bold)),
+                  const Text('Duration',
+                      style: TextStyle(
+                          color: TubeTheme.textSecondary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 8,
                     children: [
                       {'label': 'Any', 'val': 'any'},
-                      {'label': '< 4 mins', 'val': 'short'},
-                      {'label': '4 - 20 mins', 'val': 'medium'},
+                      {'label': '< 3 mins', 'val': 'short'},
+                      {'label': '3 - 20 mins', 'val': 'medium'},
                       {'label': '> 20 mins', 'val': 'long'},
                     ].map((item) {
                       final sel = tempDuration == item['val'];
@@ -245,11 +338,17 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
                         selected: sel,
                         selectedColor: TubeTheme.textPrimary,
                         backgroundColor: TubeTheme.surfaceVariant,
-                        labelStyle: TextStyle(color: sel ? TubeTheme.background : TubeTheme.textPrimary, fontSize: 11),
+                        labelStyle: TextStyle(
+                            color: sel
+                                ? TubeTheme.background
+                                : TubeTheme.textPrimary,
+                            fontSize: 11),
                         side: BorderSide.none,
                         showCheckmark: false,
                         onSelected: (val) {
-                          if (val) setModalState(() => tempDuration = item['val']!);
+                          if (val) {
+                            setModalState(() => tempDuration = item['val']!);
+                          }
                         },
                       );
                     }).toList(),
@@ -260,7 +359,8 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: TubeTheme.accent,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                       onPressed: () {
@@ -274,12 +374,15 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
                         Navigator.pop(context);
                         _executeSearch(_controller.text);
                       },
-                      child: const Text('Apply Filters', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      child: const Text('Apply Filters',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],
               ),
-            );
+            ));
           },
         );
       },
@@ -304,15 +407,24 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
           style: const TextStyle(color: TubeTheme.textPrimary, fontSize: 15),
           textInputAction: TextInputAction.search,
           onChanged: _onQueryChanged,
+          onTap: () => _onQueryChanged(_controller.text),
           onSubmitted: _executeSearch,
           decoration: InputDecoration(
             hintText: 'Search or paste YouTube URL...',
-            hintStyle: const TextStyle(color: TubeTheme.textTertiary, fontSize: 14),
-            border: InputBorder.none,
+            hintStyle:
+                const TextStyle(color: TubeTheme.textTertiary, fontSize: 14),
+            filled: true,
+            fillColor: TubeTheme.surfaceVariant,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(24),
+              borderSide: BorderSide.none,
+            ),
+            isDense: true,
             contentPadding: const EdgeInsets.symmetric(horizontal: 10),
             suffixIcon: _controller.text.isNotEmpty
                 ? IconButton(
-                    icon: const Icon(Icons.clear, color: TubeTheme.textSecondary, size: 20),
+                    icon: const Icon(Icons.clear,
+                        color: TubeTheme.textSecondary, size: 20),
                     onPressed: () {
                       _controller.clear();
                       _onQueryChanged('');
@@ -342,7 +454,8 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
               color: TubeTheme.background,
               child: ListView(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 children: ['All', 'Videos', 'Shorts'].map((f) {
                   final isSelected = f == _activeFilter;
                   return Padding(
@@ -353,9 +466,12 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
                       selectedColor: TubeTheme.textPrimary,
                       backgroundColor: TubeTheme.surfaceVariant,
                       labelStyle: TextStyle(
-                        color: isSelected ? TubeTheme.background : TubeTheme.textPrimary,
+                        color: isSelected
+                            ? TubeTheme.background
+                            : TubeTheme.textPrimary,
                         fontSize: 12,
-                        fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                        fontWeight:
+                            isSelected ? FontWeight.w600 : FontWeight.w400,
                       ),
                       side: BorderSide.none,
                       showCheckmark: false,
@@ -373,14 +489,20 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
 
           // Main Search Body
           Expanded(
-            child: _isLoading
-                ? ListView.builder(
-                    itemCount: 6,
-                    itemBuilder: (_, __) => const TubeSearchResultSkeleton(),
-                  )
-                : _hasSearched
-                    ? _buildSearchResults()
-                    : _buildSuggestionsAndRecent(),
+            child: _focusNode.hasFocus
+                ? _buildSuggestionsAndRecent()
+                : _isLoading
+                    ? ListView.builder(
+                        itemCount: 6,
+                        itemBuilder: (_, __) =>
+                            const TubeSearchResultSkeleton(),
+                      )
+                    : _hasSearched
+                        ? RefreshIndicator(
+                            onRefresh: () => _executeSearch(_submittedQuery),
+                            child: _buildSearchResults(),
+                          )
+                        : _buildSuggestionsAndRecent(),
           ),
         ],
       ),
@@ -389,16 +511,26 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
 
   Widget _buildSearchResults() {
     if (_results.videos.isEmpty && _results.channels.isEmpty && !_isLoading) {
-      return const Center(
-        child: Text('No results found for this search.', style: TextStyle(color: TubeTheme.textTertiary)),
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          Padding(
+            padding: EdgeInsets.all(24),
+            child: Text('No results found for this search.',
+                style: TextStyle(color: TubeTheme.textTertiary)),
+          )
+        ],
       );
     }
 
     final hasChannels = _results.channels.isNotEmpty;
-    final totalCount = (hasChannels ? 1 : 0) + _results.videos.length + (_results.continuationToken != null ? 1 : 0);
+    final totalCount = (hasChannels ? 1 : 0) +
+        _results.videos.length +
+        (_results.continuationToken != null ? 1 : 0);
 
     return ListView.builder(
       controller: _scrollController,
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.symmetric(vertical: 4),
       itemCount: totalCount,
       itemBuilder: (context, idx) {
@@ -419,7 +551,8 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
                 ? const SizedBox(
                     width: 24,
                     height: 24,
-                    child: CircularProgressIndicator(color: TubeTheme.accent, strokeWidth: 2),
+                    child: CircularProgressIndicator(
+                        color: TubeTheme.accent, strokeWidth: 2),
                   )
                 : const SizedBox.shrink(),
           );
@@ -428,7 +561,7 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
         // Compact Card matching YouTube Search results
         return TubeVideoCard(
           video: _results.videos[videoIdx],
-          isCompact: true,
+          isCompact: false,
         );
       },
     );
@@ -449,10 +582,16 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
           CircleAvatar(
             radius: 30,
             backgroundColor: TubeTheme.surfaceVariant,
-            backgroundImage: channel.avatarUrl.isNotEmpty ? NetworkImage(channel.avatarUrl) : null,
+            backgroundImage: channel.avatarUrl.isNotEmpty
+                ? NetworkImage(channel.avatarUrl)
+                : null,
             child: channel.avatarUrl.isEmpty
-                ? Text(channel.title.isNotEmpty ? channel.title[0].toUpperCase() : 'C',
-                    style: const TextStyle(fontSize: 20, color: TubeTheme.textPrimary))
+                ? Text(
+                    channel.title.isNotEmpty
+                        ? channel.title[0].toUpperCase()
+                        : 'C',
+                    style: const TextStyle(
+                        fontSize: 20, color: TubeTheme.textPrimary))
                 : null,
           ),
           const SizedBox(width: 14),
@@ -460,7 +599,10 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(channel.title, style: TubeTheme.titleMedium, maxLines: 1, overflow: TextOverflow.ellipsis),
+                Text(channel.title,
+                    style: TubeTheme.titleMedium,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
                 if (channel.subscriberCountText.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(channel.subscriberCountText, style: TubeTheme.bodySmall),
@@ -470,10 +612,13 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
-              backgroundColor: isFollowed ? TubeTheme.surfaceVariant : TubeTheme.textPrimary,
-              foregroundColor: isFollowed ? TubeTheme.textPrimary : TubeTheme.background,
+              backgroundColor:
+                  isFollowed ? TubeTheme.surfaceVariant : TubeTheme.textPrimary,
+              foregroundColor:
+                  isFollowed ? TubeTheme.textPrimary : TubeTheme.background,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               elevation: 0,
             ),
             onPressed: () async {
@@ -497,9 +642,13 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
         itemBuilder: (context, idx) {
           final sug = _suggestions[idx];
           return ListTile(
-            leading: const Icon(Icons.search, color: TubeTheme.textTertiary, size: 20),
-            title: Text(sug, style: const TextStyle(color: TubeTheme.textPrimary, fontSize: 14)),
-            trailing: const Icon(Icons.north_west, color: TubeTheme.textTertiary, size: 16),
+            leading: const Icon(Icons.search,
+                color: TubeTheme.textTertiary, size: 20),
+            title: Text(sug,
+                style: const TextStyle(
+                    color: TubeTheme.textPrimary, fontSize: 14)),
+            trailing: const Icon(Icons.north_west,
+                color: TubeTheme.textTertiary, size: 16),
             onTap: () {
               _controller.text = sug;
               _executeSearch(sug);
@@ -511,7 +660,8 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
 
     if (_recentSearches.isEmpty) {
       return const Center(
-        child: Text('Type any search query or paste a YouTube URL', style: TextStyle(color: TubeTheme.textTertiary, fontSize: 13)),
+        child: Text('Type any search query or paste a YouTube URL',
+            style: TextStyle(color: TubeTheme.textTertiary, fontSize: 13)),
       );
     }
 
@@ -523,13 +673,18 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Recent Searches', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: TubeTheme.textSecondary)),
+              const Text('Recent Searches',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: TubeTheme.textSecondary)),
               TextButton(
                 onPressed: () async {
                   await _storageService.clearSearchHistory();
                   if (mounted) setState(() => _recentSearches = []);
                 },
-                child: const Text('Clear All', style: TextStyle(color: TubeTheme.accent, fontSize: 12)),
+                child: const Text('Clear All',
+                    style: TextStyle(color: TubeTheme.accent, fontSize: 12)),
               ),
             ],
           ),
@@ -547,8 +702,11 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
               return ActionChip(
                 backgroundColor: TubeTheme.surfaceVariant,
                 side: BorderSide.none,
-                avatar: const Icon(Icons.history, size: 14, color: TubeTheme.textSecondary),
-                label: Text(query, style: const TextStyle(color: TubeTheme.textPrimary, fontSize: 12)),
+                avatar: const Icon(Icons.history,
+                    size: 14, color: TubeTheme.textSecondary),
+                label: Text(query,
+                    style: const TextStyle(
+                        color: TubeTheme.textPrimary, fontSize: 12)),
                 onPressed: () {
                   _controller.text = query;
                   _executeSearch(query);
@@ -578,18 +736,24 @@ class _TubeSearchScreenState extends State<TubeSearchScreen> {
             onDismissed: (_) async {
               await _storageService.removeSearchQuery(query);
               if (mounted) {
-                setState(() => _recentSearches = _storageService.getSearchHistory());
+                setState(
+                    () => _recentSearches = _storageService.getSearchHistory());
               }
             },
             child: ListTile(
-              leading: const Icon(Icons.history, color: TubeTheme.textTertiary, size: 20),
-              title: Text(query, style: const TextStyle(color: TubeTheme.textPrimary, fontSize: 14)),
+              leading: const Icon(Icons.history,
+                  color: TubeTheme.textTertiary, size: 20),
+              title: Text(query,
+                  style: const TextStyle(
+                      color: TubeTheme.textPrimary, fontSize: 14)),
               trailing: IconButton(
-                icon: const Icon(Icons.close, color: TubeTheme.textTertiary, size: 18),
+                icon: const Icon(Icons.close,
+                    color: TubeTheme.textTertiary, size: 18),
                 onPressed: () async {
                   await _storageService.removeSearchQuery(query);
                   if (mounted) {
-                    setState(() => _recentSearches = _storageService.getSearchHistory());
+                    setState(() =>
+                        _recentSearches = _storageService.getSearchHistory());
                   }
                 },
               ),

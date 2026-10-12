@@ -5,6 +5,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.media3.common.MediaItem
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -50,6 +52,9 @@ class TubeShortsPlayerBridge(private val context: Context) : Player.Listener {
         if (player != null) return
         Log.i(TAG, "Initializing AndroidX Media3 ExoPlayer instance for Shorts...")
         player = ExoPlayer.Builder(context).build().apply {
+            setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
+            setHandleAudioBecomingNoisy(true)
             addListener(this@TubeShortsPlayerBridge)
             repeatMode = Player.REPEAT_MODE_ONE // Seamless Shorts looping
             playWhenReady = false // NEVER autoplay in background on initialization

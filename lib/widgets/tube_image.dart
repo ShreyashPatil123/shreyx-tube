@@ -33,13 +33,19 @@ class TubeNetworkImage extends StatelessWidget {
       return errorWidget ?? _defaultPlaceholder();
     }
 
+    final pixels = MediaQuery.devicePixelRatioOf(context);
+    final decodeWidth = ((width ?? MediaQuery.sizeOf(context).width) * pixels)
+        .round()
+        .clamp(1, 1280);
     return CachedNetworkImage(
       imageUrl: cleanUrl,
       width: width,
       height: height,
       fit: fit,
+      memCacheWidth: decodeWidth,
       placeholder: (context, url) => placeholder ?? _shimmerPlaceholder(),
-      errorWidget: (context, url, error) => errorWidget ?? _defaultPlaceholder(),
+      errorWidget: (context, url, error) =>
+          errorWidget ?? _defaultPlaceholder(),
     );
   }
 
@@ -61,7 +67,8 @@ class TubeNetworkImage extends StatelessWidget {
       height: height,
       color: TubeTheme.surface,
       child: const Center(
-        child: Icon(Icons.play_circle_outline, color: TubeTheme.textTertiary, size: 28),
+        child: Icon(Icons.play_circle_outline,
+            color: TubeTheme.textTertiary, size: 28),
       ),
     );
   }

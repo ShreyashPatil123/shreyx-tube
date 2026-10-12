@@ -1,9 +1,10 @@
-import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import '../models/tube_models.dart';
 import 'tube_cache_service.dart';
 import 'tube_youtube_explode_pool.dart';
+import 'tube_innertube_client.dart';
+import 'tube_channel_upload_pager.dart';
 
 /// Comprehensive channel discovery service.
 /// Retrieves metadata and content across all 5 channel sections:
@@ -15,13 +16,13 @@ class TubeChannelService {
   TubeChannelService._internal();
 
   final TubeYoutubeExplodePool _ytPool = TubeYoutubeExplodePool.instance;
-  final TubeMemoryCache<TubeChannelInfo> _infoCache = TubeMemoryCache(defaultTtl: const Duration(minutes: 30));
+  final TubeMemoryCache<TubeChannelInfo> _infoCache =
+      TubeMemoryCache(defaultTtl: const Duration(minutes: 30));
 
-  final Map<String, StreamIterator<Video>> _uploadIterators = {};
-  final Map<String, List<TubeVideoItem>> _channelLoadedUploads = {};
-  final Map<String, bool> _channelHasMore = {};
+  final Map<String, TubeChannelUploadPager> _pagers = {};
+  final Map<String, Future<List<TubeVideoItem>>> _otherUploads = {};
 
-  bool hasMoreVideos(String channelId) => _channelHasMore[channelId] ?? true;
+  bool hasMoreVideos(String channelId) => _pagers[channelId]?.hasMore ?? true;
 
   /// Retrieves channel header metadata (banner, avatar, handle, follower count, description)
   Future<TubeChannelInfo> getChannel(String channelId) async {
@@ -65,7 +66,8 @@ class TubeChannelService {
     // Sort according to user preference
     switch (sort) {
       case TubeChannelSortOrder.popular:
-        normalVideos.sort((a, b) => (b.viewCount ?? 0).compareTo(a.viewCount ?? 0));
+        normalVideos
+            .sort((a, b) => (b.viewCount ?? 0).compareTo(a.viewCount ?? 0));
         break;
       case TubeChannelSortOrder.oldest:
         normalVideos.sort((a, b) {
@@ -99,32 +101,15 @@ class TubeChannelService {
     String channelId, {
     TubeChannelSortOrder sort = TubeChannelSortOrder.latest,
   }) async {
-    final iterator = _uploadIterators[channelId];
-    if (iterator == null || _channelHasMore[channelId] == false) {
-      return getChannelVideos(channelId, sort: sort);
-    }
-
-    try {
-      int count = 0;
-      while (count < 40 && await iterator.moveNext()) {
-        final video = iterator.current;
-        _channelLoadedUploads[channelId]?.add(_mapVideoToTubeItem(video));
-        count++;
-      }
-      if (count < 40) {
-        _channelHasMore[channelId] = false;
-      }
-    } catch (e) {
-      debugPrint('[TubeChannelService] Error loading more channel videos: $e');
-    }
-
+    await _pager(channelId).loadMore();
     return getChannelVideos(channelId, sort: sort);
   }
 
   /// Retrieves channel-specific Shorts
   Future<List<TubeChannelShort>> getChannelShorts(String channelId) async {
-    final rawVideos = await _getRawChannelUploads(channelId);
-    final shorts = rawVideos.where((v) => v.isShort || v.durationSeconds <= 60).toList();
+    final rawVideos = await _getOtherUploads(channelId);
+    final shorts =
+        rawVideos.where((v) => v.isShort || v.durationSeconds <= 60).toList();
 
     return shorts.map((item) {
       return TubeChannelShort(
@@ -136,7 +121,7 @@ class TubeChannelService {
 
   /// Retrieves active or past livestreams for the channel
   Future<List<TubeChannelLive>> getChannelLiveStreams(String channelId) async {
-    final rawVideos = await _getRawChannelUploads(channelId);
+    final rawVideos = await _getOtherUploads(channelId);
     final liveVideos = rawVideos.where((v) => v.isLive).toList();
 
     return liveVideos.map((item) {
@@ -148,21 +133,18 @@ class TubeChannelService {
   }
 
   /// Retrieves playlists created by this channel
-  Future<List<TubeChannelPlaylist>> getChannelPlaylists(String channelId) async {
+  Future<List<TubeChannelPlaylist>> getChannelPlaylists(
+      String channelId) async {
     return [];
   }
 
   /// Fetches public Community / Posts only if publicly available without authentication.
-  Future<List<TubeChannelPost>> getChannelCommunityPosts(String channelId) async {
+  Future<List<TubeChannelPost>> getChannelCommunityPosts(
+      String channelId) async {
     return [];
   }
 
   TubeVideoItem _mapVideoToTubeItem(Video video) {
-    final titleLower = video.title.toLowerCase();
-    final isMembersOnly = titleLower.contains('[members only]') ||
-        titleLower.contains('(members only)') ||
-        titleLower.contains('members-only');
-
     final isShort = video.duration != null && video.duration!.inSeconds <= 60;
     final isLive = video.isLive;
     final views = video.engagement.viewCount;
@@ -180,35 +162,41 @@ class TubeChannelService {
       viewCount: views,
       isShort: isShort,
       isLive: isLive,
-      isMembersOnly: isMembersOnly,
       description: video.description,
     );
   }
 
   // --- Internal Helper: Raw Uploads Stream with Caching & Lazy Pagination ---
   Future<List<TubeVideoItem>> _getRawChannelUploads(String channelId) async {
-    final cached = _channelLoadedUploads[channelId];
-    if (cached != null && cached.isNotEmpty) return cached;
-
-    final List<TubeVideoItem> items = [];
-    try {
-      final iterator = StreamIterator<Video>(_ytPool.yt.channels.getUploads(channelId));
-      _uploadIterators[channelId] = iterator;
-      _channelHasMore[channelId] = true;
-
-      int count = 0;
-      while (count < 60 && await iterator.moveNext()) {
-        final video = iterator.current;
-        items.add(_mapVideoToTubeItem(video));
-        count++;
-      }
-      if (count < 60) {
-        _channelHasMore[channelId] = false;
-      }
-      _channelLoadedUploads[channelId] = items;
-    } catch (e) {
-      debugPrint('[TubeChannelService] Channel uploads stream error: $e');
-    }
-    return items;
+    final pager = _pager(channelId);
+    return pager.items.isEmpty ? await pager.loadMore() : pager.items;
   }
+
+  TubeChannelUploadPager _pager(String channelId) => _pagers.putIfAbsent(
+      channelId,
+      () => TubeChannelUploadPager(
+            readPage: (token) async {
+              final info = await getChannel(channelId);
+              return TubeInnertubeClient().channelVideos(info.id,
+                  continuation: token, channelTitle: info.title);
+            },
+            fallbackUploads: () => _ytPool.yt.channels
+                .getUploads(channelId)
+                .map(_mapVideoToTubeItem),
+          ));
+
+  Future<List<TubeVideoItem>> _getOtherUploads(String channelId) =>
+      _otherUploads.putIfAbsent(channelId, () async {
+        try {
+          return await _ytPool.yt.channels
+              .getUploads(channelId)
+              .take(60)
+              .map(_mapVideoToTubeItem)
+              .toList()
+              .timeout(const Duration(seconds: 15));
+        } catch (_) {
+          _otherUploads.remove(channelId);
+          return <TubeVideoItem>[];
+        }
+      });
 }

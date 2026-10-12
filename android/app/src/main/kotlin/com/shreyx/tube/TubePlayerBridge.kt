@@ -10,12 +10,16 @@ import android.os.Looper
 import android.util.Log
 import android.util.Rational
 import androidx.media3.common.MediaItem
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.MediaSource
@@ -56,7 +60,17 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
     private fun initPlayer() {
         if (player != null) return
         Log.i(TAG, "Initializing AndroidX Media3 ExoPlayer instance...")
-        player = ExoPlayer.Builder(context).build().apply {
+        val trackSelector = DefaultTrackSelector(context).apply {
+            setParameters(buildUponParameters().setMaxVideoSize(1920, 1080))
+        }
+        player = ExoPlayer.Builder(context)
+            .setTrackSelector(trackSelector)
+            .setLoadControl(DefaultLoadControl.Builder()
+                .setBufferDurationsMs(15000, 45000, 750, 1500).build())
+            .build().apply {
+            setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
+            setHandleAudioBecomingNoisy(true)
             addListener(this@TubePlayerBridge)
             playWhenReady = true
         }
@@ -83,9 +97,10 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
         val channelTitle = params["channelTitle"] as? String ?: "YouTube"
 
         Log.i(TAG, "Loading Media: title=$title, deliveryMethod=$deliveryMethod, mimeType=$mimeType, hasAudio=${!audioUrl.isNullOrBlank()}, startPos=${startPositionMs}ms")
-        Log.d(TAG, "Video URL: $videoUrl")
-        if (!audioUrl.isNullOrBlank()) {
-            Log.d(TAG, "Audio URL: $audioUrl")
+        val isLive = params["isLive"] == true
+        (player?.trackSelector as? DefaultTrackSelector)?.apply {
+            setParameters(buildUponParameters().setMaxVideoSize(
+                if (isLive) 1280 else 1920, if (isLive) 720 else 1080))
         }
 
         try {
@@ -94,20 +109,26 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
                 .setArtist(channelTitle)
                 .setDisplayTitle(title)
                 .build()
+            val manifestItem = MediaItem.Builder().setUri(videoUrl).setMediaMetadata(metadata)
+                .apply {
+                    if (isLive) setLiveConfiguration(MediaItem.LiveConfiguration.Builder()
+                        .setTargetOffsetMs(3000).setMinOffsetMs(1000).setMaxOffsetMs(6000)
+                        .setMinPlaybackSpeed(0.97f).setMaxPlaybackSpeed(1.05f).build())
+                }.build()
 
             val mediaSource: MediaSource = when {
                 // 1. HLS / Live
                 deliveryMethod == "HLS" || mimeType?.contains("x-mpegURL", ignoreCase = true) == true -> {
                     Log.i(TAG, "Constructing HlsMediaSource")
                     HlsMediaSource.Factory(dataSourceFactory).createMediaSource(
-                        MediaItem.Builder().setUri(videoUrl).setMediaMetadata(metadata).build()
+                        manifestItem
                     )
                 }
                 // 2. DASH Manifest
                 deliveryMethod == "DASH_MPD" || mimeType?.contains("dash+xml", ignoreCase = true) == true -> {
                     Log.i(TAG, "Constructing DashMediaSource")
                     DashMediaSource.Factory(dataSourceFactory).createMediaSource(
-                        MediaItem.Builder().setUri(videoUrl).setMediaMetadata(metadata).build()
+                        manifestItem
                     )
                 }
                 // 3. Adaptive Video-Only + Audio-Only (1080p, 1440p, 4K)
@@ -133,7 +154,9 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
                 p.playlistMetadata = metadata
                 p.setMediaSource(mediaSource)
                 p.prepare()
-                if (startPositionMs > 0) {
+                if (isLive) {
+                    p.seekToDefaultPosition()
+                } else if (startPositionMs > 0) {
                     p.seekTo(startPositionMs)
                 }
                 p.playWhenReady = autoPlay
@@ -178,6 +201,26 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
         player?.seekTo(positionMs)
     }
 
+    fun seekToLive() {
+        alignToLiveEdge()
+        player?.play()
+    }
+
+    private fun alignToLiveEdge() {
+        val p = player ?: return
+        val offset = p.currentLiveOffset
+        if (offset != C.TIME_UNSET && p.duration > 1000) {
+            // HLS default positions can start several segments behind the
+            // requested offset. Seek within the available window, keeping a
+            // second of headroom rather than waiting for speed catch-up.
+            val target = (p.currentPosition + offset - 3000)
+                .coerceIn(0L, p.duration - 1000)
+            if (target > p.currentPosition + 500) p.seekTo(target)
+        } else {
+            p.seekToDefaultPosition()
+        }
+    }
+
     fun setSpeed(speed: Float) {
         player?.setPlaybackSpeed(speed)
     }
@@ -214,11 +257,16 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val width = if (currentVideoWidth > 0) currentVideoWidth else 16
             val height = if (currentVideoHeight > 0) currentVideoHeight else 9
-            val rational = Rational(width.coerceIn(1, 2390), height.coerceIn(1, 2390))
+            val aspect = (width.toDouble() / height).coerceIn(1.0 / 2.38, 2.38)
+            val rational = Rational((aspect * 1000).toInt(), 1000)
             val params = PictureInPictureParams.Builder()
                 .setAspectRatio(rational)
                 .build()
-            return act.enterPictureInPictureMode(params)
+            return try { act.enterPictureInPictureMode(params) }
+                catch (error: RuntimeException) {
+                    Log.w(TAG, "Picture-in-picture unavailable: ${error.message}")
+                    false
+                }
         }
         return false
     }
@@ -260,6 +308,9 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
     override fun onPlaybackStateChanged(playbackState: Int) {
         val stateStr = stateToString(playbackState)
         Log.i(TAG, "onPlaybackStateChanged: $stateStr (isPlaying=${player?.isPlaying})")
+        if (playbackState == Player.STATE_READY && player?.isCurrentMediaItemLive == true) {
+            Log.i(TAG, "Live offset: ${player?.currentLiveOffset}ms (target 3000ms)")
+        }
         mainHandler.post {
             methodChannel?.invokeMethod("onPlaybackStateChanged", mapOf(
                 "state" to stateStr,
@@ -289,6 +340,11 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
     }
 
     override fun onPlayerError(error: PlaybackException) {
+        if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+            player?.seekToDefaultPosition()
+            player?.prepare()
+            return
+        }
         val lastPos = player?.currentPosition ?: 0L
         val isHttpError = error.cause is HttpDataSource.HttpDataSourceException
         val httpCode = (error.cause as? HttpDataSource.InvalidResponseCodeException)?.responseCode ?: -1
@@ -307,6 +363,7 @@ class TubePlayerBridge(private val context: Context) : Player.Listener {
     }
 
     fun release() {
+        context.stopService(Intent(context, TubePlaybackService::class.java))
         stopProgressTracking()
         player?.removeListener(this)
         player?.release()

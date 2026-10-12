@@ -45,8 +45,10 @@ class TubeVideoCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: const Icon(Icons.playlist_play, color: TubeTheme.textPrimary),
-                title: const Text('Play Next in Queue', style: TextStyle(color: TubeTheme.textPrimary)),
+                leading: const Icon(Icons.playlist_play,
+                    color: TubeTheme.textPrimary),
+                title: const Text('Play Next in Queue',
+                    style: TextStyle(color: TubeTheme.textPrimary)),
                 onTap: () {
                   provider.playNextInQueue(video);
                   Navigator.pop(ctx);
@@ -56,8 +58,10 @@ class TubeVideoCard extends StatelessWidget {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.queue_music, color: TubeTheme.textPrimary),
-                title: const Text('Add to Queue', style: TextStyle(color: TubeTheme.textPrimary)),
+                leading:
+                    const Icon(Icons.queue_music, color: TubeTheme.textPrimary),
+                title: const Text('Add to Queue',
+                    style: TextStyle(color: TubeTheme.textPrimary)),
                 onTap: () {
                   provider.addToQueue(video);
                   Navigator.pop(ctx);
@@ -67,8 +71,10 @@ class TubeVideoCard extends StatelessWidget {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.watch_later_outlined, color: TubeTheme.textPrimary),
-                title: const Text('Save to Watch Later', style: TextStyle(color: TubeTheme.textPrimary)),
+                leading: const Icon(Icons.watch_later_outlined,
+                    color: TubeTheme.textPrimary),
+                title: const Text('Save to Watch Later',
+                    style: TextStyle(color: TubeTheme.textPrimary)),
                 onTap: () async {
                   Navigator.pop(ctx);
                   // FIX BUG: Actually persist to database and storage!
@@ -81,38 +87,48 @@ class TubeVideoCard extends StatelessWidget {
                   }
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.download_outlined, color: TubeTheme.textPrimary),
-                title: const Text('Download Video', style: TextStyle(color: TubeTheme.textPrimary)),
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  if (TubeDownloadService().isDownloaded(video.id)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Video already downloaded')),
-                    );
-                    return;
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Starting download for "${video.title}"...')),
-                  );
-                  try {
-                    final resolved = await TubeStreamResolver().resolve(video.id);
-                    final stream = resolved.getBestStream('Auto');
-                    if (stream != null) {
-                      await TubeDownloadService().startDownload(video: video, stream: stream);
-                    }
-                  } catch (e) {
-                    if (context.mounted) {
+              if (!video.isMembersOnly)
+                ListTile(
+                  leading: const Icon(Icons.download_outlined,
+                      color: TubeTheme.textPrimary),
+                  title: const Text('Download Video',
+                      style: TextStyle(color: TubeTheme.textPrimary)),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    if (TubeDownloadService().isDownloaded(video.id)) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Download failed: $e')),
+                        const SnackBar(
+                            content: Text('Video already downloaded')),
                       );
+                      return;
                     }
-                  }
-                },
-              ),
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                          content: Text(
+                              'Starting download for "${video.title}"...')),
+                    );
+                    try {
+                      final resolved =
+                          await TubeStreamResolver().resolve(video.id);
+                      final stream = resolved.getBestStream('Auto');
+                      if (stream != null) {
+                        await TubeDownloadService()
+                            .startDownload(video: video, stream: stream);
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Download failed: $e')),
+                        );
+                      }
+                    }
+                  },
+                ),
               ListTile(
-                leading: const Icon(Icons.share_outlined, color: TubeTheme.textPrimary),
-                title: const Text('Share', style: TextStyle(color: TubeTheme.textPrimary)),
+                leading: const Icon(Icons.share_outlined,
+                    color: TubeTheme.textPrimary),
+                title: const Text('Share',
+                    style: TextStyle(color: TubeTheme.textPrimary)),
                 onTap: () {
                   Navigator.pop(ctx);
                   Clipboard.setData(ClipboardData(text: video.watchUrl));
@@ -122,29 +138,39 @@ class TubeVideoCard extends StatelessWidget {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.not_interested, color: TubeTheme.textPrimary),
-                title: const Text('Not interested', style: TextStyle(color: TubeTheme.textPrimary)),
+                leading: const Icon(Icons.not_interested,
+                    color: TubeTheme.textPrimary),
+                title: const Text('Not interested',
+                    style: TextStyle(color: TubeTheme.textPrimary)),
                 onTap: () async {
                   Navigator.pop(ctx);
-                  await db.addFeedback(video.id, video.channelId, 'not_interested');
+                  await db.addFeedback(
+                      video.id, video.channelId, 'not_interested');
                   await storage.markNotInterested(video.id);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Recommendation updated: We will show fewer videos like this')),
+                      const SnackBar(
+                          content: Text(
+                              'Recommendation updated: We will show fewer videos like this')),
                     );
                   }
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.do_not_disturb_on_outlined, color: TubeTheme.textPrimary),
-                title: const Text("Don't recommend channel", style: TextStyle(color: TubeTheme.textPrimary)),
+                leading: const Icon(Icons.do_not_disturb_on_outlined,
+                    color: TubeTheme.textPrimary),
+                title: const Text("Don't recommend channel",
+                    style: TextStyle(color: TubeTheme.textPrimary)),
                 onTap: () async {
                   Navigator.pop(ctx);
-                  await db.addFeedback(video.id, video.channelId, 'dont_recommend_channel');
+                  await db.addFeedback(
+                      video.id, video.channelId, 'dont_recommend_channel');
                   await storage.blockChannel(video.channelTitle);
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('We will not recommend videos from ${video.channelTitle}')),
+                      SnackBar(
+                          content: Text(
+                              'We will not recommend videos from ${video.channelTitle}')),
                     );
                   }
                 },
@@ -203,10 +229,14 @@ class TubeVideoCard extends StatelessWidget {
                     bottom: 8,
                     right: 8,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 2),
                       decoration: BoxDecoration(
-                        color: video.isLive ? TubeTheme.live : Colors.black.withValues(alpha: 0.8),
-                        borderRadius: BorderRadius.circular(TubeTheme.durationBadgeRadius),
+                        color: video.isLive
+                            ? TubeTheme.live
+                            : Colors.black.withValues(alpha: 0.8),
+                        borderRadius: BorderRadius.circular(
+                            TubeTheme.durationBadgeRadius),
                       ),
                       child: Text(
                         video.formattedDuration,
@@ -247,16 +277,8 @@ class TubeVideoCard extends StatelessWidget {
                           ? NetworkImage(video.channelAvatarUrl)
                           : null,
                       child: video.channelAvatarUrl.isEmpty
-                          ? Text(
-                              video.channelTitle.isNotEmpty
-                                  ? video.channelTitle[0].toUpperCase()
-                                  : 'Y',
-                              style: const TextStyle(
-                                color: TubeTheme.textPrimary,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                              ),
-                            )
+                          ? const Icon(Icons.person_outline,
+                              color: TubeTheme.textSecondary, size: 22)
                           : null,
                     ),
                   ),
@@ -274,6 +296,7 @@ class TubeVideoCard extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
+                      if (video.isMembersOnly) _membersBadge(),
                       const SizedBox(height: 4),
                       Text(
                         metadataText,
@@ -287,9 +310,11 @@ class TubeVideoCard extends StatelessWidget {
 
                 // 3-dots action menu
                 IconButton(
-                  icon: const Icon(Icons.more_vert, size: 20, color: TubeTheme.textSecondary),
+                  icon: const Icon(Icons.more_vert,
+                      size: 20, color: TubeTheme.textSecondary),
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
                   onPressed: () => _showActionMenu(context),
                 ),
               ],
@@ -324,7 +349,8 @@ class TubeVideoCard extends StatelessWidget {
               width: TubeTheme.compactThumbWidth,
               height: TubeTheme.compactThumbHeight,
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(TubeTheme.thumbnailRadiusCompact),
+                borderRadius:
+                    BorderRadius.circular(TubeTheme.thumbnailRadiusCompact),
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
@@ -337,10 +363,14 @@ class TubeVideoCard extends StatelessWidget {
                         bottom: 6,
                         right: 6,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 2),
                           decoration: BoxDecoration(
-                            color: video.isLive ? TubeTheme.live : Colors.black.withValues(alpha: 0.8),
-                            borderRadius: BorderRadius.circular(TubeTheme.durationBadgeRadius),
+                            color: video.isLive
+                                ? TubeTheme.live
+                                : Colors.black.withValues(alpha: 0.8),
+                            borderRadius: BorderRadius.circular(
+                                TubeTheme.durationBadgeRadius),
                           ),
                           child: Text(
                             video.formattedDuration,
@@ -365,6 +395,7 @@ class TubeVideoCard extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  if (video.isMembersOnly) _membersBadge(),
                   const SizedBox(height: 4),
                   Text(
                     video.channelTitle,
@@ -375,7 +406,8 @@ class TubeVideoCard extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     detailText,
-                    style: TubeTheme.labelSmall.copyWith(color: TubeTheme.textTertiary),
+                    style: TubeTheme.labelSmall
+                        .copyWith(color: TubeTheme.textTertiary),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -385,7 +417,8 @@ class TubeVideoCard extends StatelessWidget {
 
             // 3-dots action menu
             IconButton(
-              icon: const Icon(Icons.more_vert, size: 18, color: TubeTheme.textSecondary),
+              icon: const Icon(Icons.more_vert,
+                  size: 18, color: TubeTheme.textSecondary),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
               onPressed: () => _showActionMenu(context),
@@ -395,4 +428,17 @@ class TubeVideoCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _membersBadge() => Container(
+        margin: const EdgeInsets.only(top: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+            color: TubeTheme.membersGold,
+            borderRadius: BorderRadius.circular(4)),
+        child: const Text('MEMBERS ONLY',
+            style: TextStyle(
+                color: Colors.black,
+                fontSize: 10,
+                fontWeight: FontWeight.bold)),
+      );
 }

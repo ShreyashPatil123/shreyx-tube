@@ -11,6 +11,7 @@ class TubeVideoStream {
   final bool isVideoOnly;
   final String deliveryMethod;
   final String manifestType;
+  final bool isLive;
   String? pairedAudioUrl;
 
   TubeVideoStream({
@@ -26,6 +27,7 @@ class TubeVideoStream {
     required this.isVideoOnly,
     required this.deliveryMethod,
     required this.manifestType,
+    this.isLive = false,
     this.pairedAudioUrl,
   });
 
@@ -43,11 +45,13 @@ class TubeVideoStream {
       isVideoOnly: map['isVideoOnly'] == true,
       deliveryMethod: map['deliveryMethod']?.toString() ?? 'PROGRESSIVE',
       manifestType: map['manifestType']?.toString() ?? 'PROGRESSIVE',
+      isLive: map['isLive'] == true,
       pairedAudioUrl: map['pairedAudioUrl']?.toString(),
     );
   }
 
-  Map<String, dynamic> toMediaParams({int startPositionMs = 0, bool autoPlay = true}) {
+  Map<String, dynamic> toMediaParams(
+      {int startPositionMs = 0, bool autoPlay = true}) {
     return {
       'videoUrl': url,
       'audioUrl': pairedAudioUrl,
@@ -56,6 +60,7 @@ class TubeVideoStream {
       'container': container,
       'startPositionMs': startPositionMs,
       'autoPlay': autoPlay,
+      'isLive': isLive,
     };
   }
 
@@ -121,6 +126,8 @@ class TubeResolvedVideo {
   final String videoId;
   final String title;
   final String uploader;
+  final String uploaderUrl;
+  final String uploaderAvatarUrl;
   final int durationSeconds;
   final String thumbnailUrl;
   final List<TubeVideoStream> videoStreams;
@@ -129,11 +136,14 @@ class TubeResolvedVideo {
   final String? hlsUrl;
   final String? dashMpdUrl;
   final String extractorSource;
+  final bool isLive;
 
   TubeResolvedVideo({
     required this.videoId,
     required this.title,
     required this.uploader,
+    this.uploaderUrl = '',
+    this.uploaderAvatarUrl = '',
     required this.durationSeconds,
     required this.thumbnailUrl,
     required this.videoStreams,
@@ -142,6 +152,7 @@ class TubeResolvedVideo {
     this.hlsUrl,
     this.dashMpdUrl,
     required this.extractorSource,
+    this.isLive = false,
   });
 
   /// Returns the distinct list of actually available video qualities for this specific video.
@@ -155,28 +166,65 @@ class TubeResolvedVideo {
     // Sort descending by numeric height
     final sorted = set.toList()
       ..sort((a, b) {
-        final aNum = int.tryParse(RegExp(r'\d+').firstMatch(a)?.group(0) ?? '0') ?? 0;
-        final bNum = int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '0') ?? 0;
+        final aNum =
+            int.tryParse(RegExp(r'\d+').firstMatch(a)?.group(0) ?? '0') ?? 0;
+        final bNum =
+            int.tryParse(RegExp(r'\d+').firstMatch(b)?.group(0) ?? '0') ?? 0;
         return bNum.compareTo(aNum);
       });
     return ['Auto', ...sorted];
   }
 
   TubeVideoStream? getBestStream(String preferredQuality) {
+    // Live formats are segmented manifests, not seekable progressive files.
+    if (isLive) {
+      final hls = hlsUrl?.trim() ?? '';
+      final dash = dashMpdUrl?.trim() ?? '';
+      if (hls.isNotEmpty || dash.isNotEmpty) {
+        return TubeVideoStream(
+          url: hls.isNotEmpty ? hls : dash,
+          resolution: 'Auto',
+          width: 0,
+          height: 0,
+          container: hls.isNotEmpty ? 'm3u8' : 'mpd',
+          mimeType:
+              hls.isNotEmpty ? 'application/x-mpegURL' : 'application/dash+xml',
+          codec: '',
+          fps: 30,
+          bitrate: 0,
+          isVideoOnly: false,
+          deliveryMethod: hls.isNotEmpty ? 'HLS' : 'DASH_MPD',
+          manifestType: hls.isNotEmpty ? 'HLS' : 'DASH_MPD',
+          isLive: true,
+        );
+      }
+    }
     if (videoStreams.isEmpty) return null;
 
     if (preferredQuality != 'Auto') {
       // Find exact match by resolution or height
-      final match = videoStreams.where((s) => s.resolution.toLowerCase() == preferredQuality.toLowerCase());
+      final match = videoStreams.where(
+          (s) => s.resolution.toLowerCase() == preferredQuality.toLowerCase());
       if (match.isNotEmpty) return match.first;
 
-      final partialMatch = videoStreams.where((s) => s.resolution.toLowerCase().contains(preferredQuality.toLowerCase()));
+      final partialMatch = videoStreams.where((s) =>
+          s.resolution.toLowerCase().contains(preferredQuality.toLowerCase()));
       if (partialMatch.isNotEmpty) return partialMatch.first;
     }
 
-    // Default Auto preference: 1080p -> 720p -> 480p -> 360p
-    for (final target in ['1080p', '720p', '480p', '360p']) {
-      final match = videoStreams.where((s) => s.resolution.toLowerCase().contains(target));
+    // Start at a mobile-friendly quality; explicit higher qualities stay available.
+    for (final target in [720, 480, 360, 1080]) {
+      final match = videoStreams
+          .where((s) =>
+              s.height == target &&
+              (!s.isVideoOnly || s.pairedAudioUrl?.isNotEmpty == true))
+          .toList()
+        ..sort((a, b) {
+          int cost(TubeVideoStream s) =>
+              (s.isVideoOnly ? 2 : 0) +
+              (s.codec.toLowerCase().contains('avc') ? 0 : 1);
+          return cost(a).compareTo(cost(b));
+        });
       if (match.isNotEmpty) {
         return match.first;
       }

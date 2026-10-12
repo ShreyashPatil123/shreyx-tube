@@ -20,7 +20,8 @@ class TubeHomeScreen extends StatefulWidget {
   State<TubeHomeScreen> createState() => _TubeHomeScreenState();
 }
 
-class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAliveClientMixin {
+class _TubeHomeScreenState extends State<TubeHomeScreen>
+    with AutomaticKeepAliveClientMixin {
   final TubeHomeFeedService _feedService = TubeHomeFeedService();
   final TubeShortsService _shortsService = TubeShortsService();
   final TubeStorageService _storageService = TubeStorageService();
@@ -35,6 +36,7 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
     'Education',
     'News',
     'Sports',
+    'Live',
   ];
 
   String _selectedCategory = 'Recommended';
@@ -44,6 +46,7 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
   bool _isRefreshing = false;
   bool _isLoadingMore = false;
   String? _errorMessage;
+  int _feedGeneration = 0;
 
   @override
   bool get wantKeepAlive => true;
@@ -59,7 +62,10 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
       if (_scrollController.hasClients) {
         final maxScroll = _scrollController.position.maxScrollExtent;
         final currentScroll = _scrollController.position.pixels;
-        if (currentScroll >= maxScroll - 800 && !_isLoadingMore && !_isLoading && _feed.isNotEmpty) {
+        if (currentScroll >= maxScroll - 800 &&
+            !_isLoadingMore &&
+            !_isLoading &&
+            _feed.isNotEmpty) {
           _loadNextPage();
         }
       }
@@ -84,6 +90,8 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
   }
 
   Future<void> _loadFeed(String category, {bool forceRefresh = false}) async {
+    final generation = ++_feedGeneration;
+    _isLoadingMore = false;
     if (forceRefresh && _feed.isNotEmpty) {
       setState(() {
         _isRefreshing = true;
@@ -97,8 +105,9 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
     }
 
     try {
-      final list = await _feedService.getCategoryFeed(category, forceRefresh: forceRefresh);
-      if (mounted) {
+      final list = await _feedService.getCategoryFeed(category,
+          forceRefresh: forceRefresh);
+      if (mounted && generation == _feedGeneration) {
         setState(() {
           _feed = list;
           _isLoading = false;
@@ -106,9 +115,10 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && generation == _feedGeneration) {
         setState(() {
-          _errorMessage = 'Could not load $category feed. Check internet connection.';
+          _errorMessage =
+              'Could not load $category feed. Check internet connection.';
           _isLoading = false;
           _isRefreshing = false;
         });
@@ -117,12 +127,20 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
   }
 
   Future<void> _loadNextPage() async {
-    if (_isLoadingMore || _isLoading || _feed.isEmpty) return;
+    if (_isLoadingMore ||
+        _isLoading ||
+        _isRefreshing ||
+        _feed.isEmpty ||
+        !_feedService.hasMore(_selectedCategory)) {
+      return;
+    }
+    final generation = _feedGeneration;
     setState(() => _isLoadingMore = true);
 
     try {
-      final more = await _feedService.getCategoryFeedNextPage(_selectedCategory);
-      if (mounted) {
+      final more =
+          await _feedService.getCategoryFeedNextPage(_selectedCategory);
+      if (mounted && generation == _feedGeneration) {
         setState(() {
           final existingIds = _feed.map((v) => v.id).toSet();
           final fresh = more.where((v) => !existingIds.contains(v.id)).toList();
@@ -131,7 +149,7 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
         });
       }
     } catch (_) {
-      if (mounted) {
+      if (mounted && generation == _feedGeneration) {
         setState(() => _isLoadingMore = false);
       }
     }
@@ -178,7 +196,10 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
             const SizedBox(width: 8),
             const Text(
               'TUBE',
-              style: TextStyle(fontWeight: FontWeight.w300, letterSpacing: 1.5, fontSize: 16),
+              style: TextStyle(
+                  fontWeight: FontWeight.w300,
+                  letterSpacing: 1.5,
+                  fontSize: 16),
             ),
             if (isIncognito) ...[
               const SizedBox(width: 8),
@@ -192,9 +213,14 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.visibility_off, size: 11, color: Colors.amberAccent),
+                    Icon(Icons.visibility_off,
+                        size: 11, color: Colors.amberAccent),
                     SizedBox(width: 4),
-                    Text('Incognito', style: TextStyle(fontSize: 10, color: Colors.amberAccent, fontWeight: FontWeight.bold)),
+                    Text('Incognito',
+                        style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.amberAccent,
+                            fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),
@@ -213,12 +239,16 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
             tooltip: 'Search',
           ),
           IconButton(
-            icon: const Icon(Icons.shield_outlined, color: TubeTheme.textSecondary),
+            icon: const Icon(Icons.shield_outlined,
+                color: TubeTheme.textSecondary),
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const TubePrivacySettingsScreen()),
-              ).then((_) => setState(() {}));
+                MaterialPageRoute(
+                    builder: (_) => const TubePrivacySettingsScreen()),
+              ).then((_) {
+                if (mounted) setState(() {});
+              });
             },
             tooltip: 'Privacy Settings',
           ),
@@ -239,10 +269,13 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                   return Padding(
                     padding: const EdgeInsets.only(left: 4.0),
                     child: ActionChip(
-                      label: const Text('Explore', style: TextStyle(fontSize: 12, color: TubeTheme.textPrimary)),
+                      label: const Text('Explore',
+                          style: TextStyle(
+                              fontSize: 12, color: TubeTheme.textPrimary)),
                       backgroundColor: TubeTheme.surfaceVariant,
                       side: BorderSide.none,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
                       onPressed: () {
                         Navigator.push(
                           context,
@@ -263,17 +296,21 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                 return Padding(
                   padding: const EdgeInsets.only(right: 8.0),
                   child: ChoiceChip(
-                    label: Text(cat),
+                    label: Text(cat == 'Recommended' ? 'All' : cat),
                     selected: isSelected,
                     selectedColor: TubeTheme.textPrimary,
                     backgroundColor: TubeTheme.surfaceVariant,
                     labelStyle: TextStyle(
-                      color: isSelected ? TubeTheme.background : TubeTheme.textPrimary,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                      color: isSelected
+                          ? TubeTheme.background
+                          : TubeTheme.textPrimary,
+                      fontWeight:
+                          isSelected ? FontWeight.w600 : FontWeight.w400,
                       fontSize: 13,
                     ),
                     side: BorderSide.none,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8)),
                     showCheckmark: false,
                     onSelected: (val) {
                       if (val) {
@@ -315,14 +352,21 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(Icons.wifi_off, size: 48, color: TubeTheme.textTertiary),
+                                const Icon(Icons.wifi_off,
+                                    size: 48, color: TubeTheme.textTertiary),
                                 const SizedBox(height: 12),
-                                Text(_errorMessage!, textAlign: TextAlign.center, style: const TextStyle(color: TubeTheme.textSecondary)),
+                                Text(_errorMessage!,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                        color: TubeTheme.textSecondary)),
                                 const SizedBox(height: 16),
                                 ElevatedButton(
-                                  style: ElevatedButton.styleFrom(backgroundColor: TubeTheme.accent),
-                                  onPressed: () => _loadFeed(_selectedCategory, forceRefresh: true),
-                                  child: const Text('Retry', style: TextStyle(color: Colors.white)),
+                                  style: ElevatedButton.styleFrom(
+                                      backgroundColor: TubeTheme.accent),
+                                  onPressed: () => _loadFeed(_selectedCategory,
+                                      forceRefresh: true),
+                                  child: const Text('Retry',
+                                      style: TextStyle(color: Colors.white)),
                                 ),
                               ],
                             ),
@@ -330,34 +374,45 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                         )
                       : _feed.isEmpty
                           ? const Center(
-                              child: Text('No videos found in this category.', style: TextStyle(color: TubeTheme.textTertiary)),
+                              child: Text('No videos found in this category.',
+                                  style:
+                                      TextStyle(color: TubeTheme.textTertiary)),
                             )
                           : ListView.builder(
                               controller: _scrollController,
                               padding: const EdgeInsets.only(bottom: 24),
-                              itemCount: _feed.length + (resumeItems.isNotEmpty ? 1 : 0) + (_homeShorts.isNotEmpty ? 1 : 0) + 1,
+                              itemCount: _feed.length +
+                                  (resumeItems.isNotEmpty ? 1 : 0) +
+                                  (_homeShorts.isNotEmpty ? 1 : 0) +
+                                  1,
                               itemBuilder: (context, idx) {
                                 int offset = 0;
 
                                 // Slot 0: Continue Watching Shelf
                                 if (resumeItems.isNotEmpty) {
-                                  if (idx == 0) return _buildContinueWatchingShelf(resumeItems);
+                                  if (idx == 0) {
+                                    return _buildContinueWatchingShelf(
+                                        resumeItems);
+                                  }
                                   offset++;
                                 }
 
                                 // Slot 3 or 4: Shorts Shelf
                                 final adjustedIdx = idx - offset;
-                                if (_homeShorts.isNotEmpty && adjustedIdx == 3) {
+                                if (_homeShorts.isNotEmpty &&
+                                    adjustedIdx == 3) {
                                   return _buildShortsShelf();
                                 }
-                                final videoIdx = _homeShorts.isNotEmpty && adjustedIdx > 3
-                                    ? adjustedIdx - 1
-                                    : adjustedIdx;
+                                final videoIdx =
+                                    _homeShorts.isNotEmpty && adjustedIdx > 3
+                                        ? adjustedIdx - 1
+                                        : adjustedIdx;
 
                                 // Bottom pagination spinner
                                 if (videoIdx >= _feed.length) {
                                   return Container(
-                                    padding: const EdgeInsets.symmetric(vertical: 24),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 24),
                                     alignment: Alignment.center,
                                     child: _isLoadingMore
                                         ? const SizedBox(
@@ -401,7 +456,10 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                 SizedBox(width: 8),
                 Text(
                   'Continue Watching',
-                  style: TextStyle(color: TubeTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 14),
+                  style: TextStyle(
+                      color: TubeTheme.textPrimary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14),
                 ),
               ],
             ),
@@ -419,7 +477,8 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                 return GestureDetector(
                   onTap: () {
                     final player = context.read<TubePlayerProvider>();
-                    player.playVideo(item.video, startPositionMs: item.positionMs);
+                    player.playVideo(item.video,
+                        startPositionMs: item.positionMs);
                   },
                   child: SizedBox(
                     width: 170,
@@ -442,14 +501,18 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                               bottom: 6,
                               right: 6,
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 2),
                                 decoration: BoxDecoration(
                                   color: Colors.black.withValues(alpha: 0.8),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: Text(
                                   item.formattedResumePosition,
-                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold),
                                 ),
                               ),
                             ),
@@ -458,11 +521,14 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                               left: 0,
                               right: 0,
                               child: ClipRRect(
-                                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
+                                borderRadius: const BorderRadius.vertical(
+                                    bottom: Radius.circular(8)),
                                 child: LinearProgressIndicator(
                                   value: item.progressRatio,
                                   backgroundColor: Colors.white24,
-                                  valueColor: const AlwaysStoppedAnimation<Color>(TubeTheme.progressRed),
+                                  valueColor:
+                                      const AlwaysStoppedAnimation<Color>(
+                                          TubeTheme.progressRed),
                                   minHeight: 3,
                                 ),
                               ),
@@ -474,14 +540,18 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                           item.video.title,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: TubeTheme.textPrimary, fontSize: 12, fontWeight: FontWeight.w500),
+                          style: const TextStyle(
+                              color: TubeTheme.textPrimary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           item.video.channelTitle,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: TubeTheme.textSecondary, fontSize: 10),
+                          style: const TextStyle(
+                              color: TubeTheme.textSecondary, fontSize: 10),
                         ),
                       ],
                     ),
@@ -511,7 +581,10 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                 SizedBox(width: 8),
                 Text(
                   'Shorts',
-                  style: TextStyle(color: TubeTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 16),
+                  style: TextStyle(
+                      color: TubeTheme.textPrimary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16),
                 ),
               ],
             ),
@@ -550,12 +623,16 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                                   bottom: 6,
                                   right: 6,
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: Colors.black.withValues(alpha: 0.7),
+                                      color:
+                                          Colors.black.withValues(alpha: 0.7),
                                       borderRadius: BorderRadius.circular(3),
                                     ),
-                                    child: const Text('Short', style: TextStyle(color: Colors.white, fontSize: 9)),
+                                    child: const Text('Short',
+                                        style: TextStyle(
+                                            color: Colors.white, fontSize: 9)),
                                   ),
                                 ),
                               ],
@@ -567,7 +644,10 @@ class _TubeHomeScreenState extends State<TubeHomeScreen> with AutomaticKeepAlive
                           short.title,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: TubeTheme.textPrimary),
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                              color: TubeTheme.textPrimary),
                         ),
                       ],
                     ),

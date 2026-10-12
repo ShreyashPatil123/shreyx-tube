@@ -13,10 +13,10 @@ import '../services/tube_user_profile_service.dart';
 /// Central state provider for normal video playback, queue management, subtitles,
 /// position preservation, mini-player visibility, and local engagement actions.
 class TubePlayerProvider extends ChangeNotifier {
-  final TubeStreamResolver _resolver = TubeStreamResolver();
+  final TubeStreamResolver _resolver;
   final TubePlayerService _playerService = TubePlayerService();
   final TubeSubtitleService _subtitleService = TubeSubtitleService();
-  final TubeHomeFeedService _homeFeedService = TubeHomeFeedService();
+  final TubeHomeFeedService _homeFeedService;
   final TubeStorageService _storageService = TubeStorageService();
 
   // Active Playback State & 10-State Lifecycle
@@ -26,6 +26,12 @@ class TubePlayerProvider extends ChangeNotifier {
   TubeVideoStream? _currentStream;
   String _selectedQuality = 'Auto';
   String? _errorMessage;
+  int _playGeneration = 0;
+  bool _disposed = false;
+  bool _acceptPlayerEvents = false;
+  bool get isLive =>
+      _resolvedVideo?.isLive == true || _currentVideoItem?.isLive == true;
+  bool get isMembersOnly => _currentVideoItem?.isMembersOnly == true;
 
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -98,11 +104,20 @@ class TubePlayerProvider extends ChangeNotifier {
   List<String> get telemetryLogs => List.unmodifiable(_telemetryLogs);
 
   // Local Actions
-  bool get isLikedLocally => _currentVideoItem != null && _storageService.isLikedLocally(_currentVideoItem!.id);
-  bool get isInWatchLater => _currentVideoItem != null && _storageService.isInWatchLater(_currentVideoItem!.id);
-  bool get isChannelFollowed => _currentVideoItem != null && _storageService.isChannelFollowed(_currentVideoItem!.channelId);
+  bool get isLikedLocally =>
+      _currentVideoItem != null &&
+      _storageService.isLikedLocally(_currentVideoItem!.id);
+  bool get isInWatchLater =>
+      _currentVideoItem != null &&
+      _storageService.isInWatchLater(_currentVideoItem!.id);
+  bool get isChannelFollowed =>
+      _currentVideoItem != null &&
+      _storageService.isChannelFollowed(_currentVideoItem!.channelId);
 
-  TubePlayerProvider() {
+  TubePlayerProvider(
+      {TubeStreamResolver? resolver, TubeHomeFeedService? homeFeedService})
+      : _resolver = resolver ?? TubeStreamResolver(),
+        _homeFeedService = homeFeedService ?? TubeHomeFeedService() {
     _initSubscriptions();
   }
 
@@ -112,11 +127,16 @@ class TubePlayerProvider extends ChangeNotifier {
     _telemetryLogs.insert(0, logLine);
     if (_telemetryLogs.length > 50) _telemetryLogs.removeLast();
     debugPrint('[TubePlayerProvider] $msg');
-    notifyListeners();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
   }
 
   void _initSubscriptions() {
     _subscriptions.add(_playerService.progressStream.listen((prog) {
+      if (isMembersOnly || !_acceptPlayerEvents) return;
       _position = prog.position;
       if (prog.duration > Duration.zero) {
         _duration = prog.duration;
@@ -139,7 +159,8 @@ class TubePlayerProvider extends ChangeNotifier {
 
       // Throttled local history saving (every 5 seconds)
       final now = DateTime.now();
-      if (_currentVideoItem != null && now.difference(_lastPositionSaveTime).inSeconds >= 5) {
+      if (_currentVideoItem != null &&
+          now.difference(_lastPositionSaveTime).inSeconds >= 5) {
         _lastPositionSaveTime = now;
         _storageService.saveWatchPosition(
           _currentVideoItem!,
@@ -152,6 +173,7 @@ class TubePlayerProvider extends ChangeNotifier {
     }));
 
     _subscriptions.add(_playerService.isPlayingStream.listen((playing) {
+      if (isMembersOnly || !_acceptPlayerEvents) return;
       if (playing) {
         _status = TubePlayerStatus.playing;
       } else if (_status != TubePlayerStatus.completed &&
@@ -164,11 +186,13 @@ class TubePlayerProvider extends ChangeNotifier {
     }));
 
     _subscriptions.add(_playerService.stateStream.listen((state) {
+      if (isMembersOnly || !_acceptPlayerEvents) return;
       _log('Player state: $state');
       if (state == 'BUFFERING') {
         _status = TubePlayerStatus.buffering;
       } else if (state == 'READY') {
-        _status = TubePlayerStatus.playing;
+        _status =
+            isPlaying ? TubePlayerStatus.playing : TubePlayerStatus.paused;
         _retryAttempts = 0;
       } else if (state == 'ENDED') {
         _status = TubePlayerStatus.completed;
@@ -182,24 +206,30 @@ class TubePlayerProvider extends ChangeNotifier {
       final height = (map['height'] as num?)?.toDouble() ?? 9.0;
       if (width > 0 && height > 0) {
         _aspectRatio = width / height;
-        _log('Video size updated: ${width.toInt()}x${height.toInt()} (aspect: ${_aspectRatio.toStringAsFixed(2)})');
+        _log(
+            'Video size updated: ${width.toInt()}x${height.toInt()} (aspect: ${_aspectRatio.toStringAsFixed(2)})');
         notifyListeners();
       }
     }));
 
     // Stream failure & automatic position-preserving recovery
     _subscriptions.add(_playerService.errorStream.listen((errMap) {
+      if (isMembersOnly || !_acceptPlayerEvents) return;
       final isHttp = errMap['isHttpError'] == true;
       final httpCode = (errMap['httpCode'] as num?)?.toInt() ?? -1;
-      final lastPosMs = (errMap['lastPositionMs'] as num?)?.toInt() ?? _position.inMilliseconds;
+      final lastPosMs = (errMap['lastPositionMs'] as num?)?.toInt() ??
+          _position.inMilliseconds;
       final msg = errMap['message']?.toString() ?? 'Playback error';
 
-      _log('Media3 error: $msg (http: $isHttp, code: $httpCode, pos: ${lastPosMs}ms)');
+      _log(
+          'Media3 error: $msg (http: $isHttp, code: $httpCode, pos: ${lastPosMs}ms)');
 
-      if ((isHttp || httpCode == 403 || httpCode == 410 || httpCode == 404) && _retryAttempts < _maxRetries) {
+      if ((isHttp || httpCode == 403 || httpCode == 410 || httpCode == 404) &&
+          _retryAttempts < _maxRetries) {
         _retryAttempts++;
         _status = TubePlayerStatus.retrying;
-        _log('🔄 Stream token expired. Auto-recovering (attempt $_retryAttempts/$_maxRetries) from ${lastPosMs}ms...');
+        _log(
+            '🔄 Stream token expired. Auto-recovering (attempt $_retryAttempts/$_maxRetries) from ${lastPosMs}ms...');
         notifyListeners();
         _reResolveAndResume(Duration(milliseconds: lastPosMs));
       } else {
@@ -216,7 +246,8 @@ class TubePlayerProvider extends ChangeNotifier {
 
   /// Plays a video item directly from Home, Search, History, or Queue.
   /// Instantly opens the Watch screen and displays the poster HUD without blocking on stream extraction.
-  Future<void> playVideo(TubeVideoItem video, {int? startPositionMs, bool expand = true}) async {
+  Future<void> playVideo(TubeVideoItem video,
+      {int? startPositionMs, bool expand = true}) async {
     // Central Player Ownership: Stop Shorts player immediately so only one player runs
     const MethodChannel('com.shreyx.tube/shorts_player_channel')
         .invokeMethod('stop')
@@ -224,6 +255,16 @@ class TubePlayerProvider extends ChangeNotifier {
 
     // 1. Record metrics for outgoing video if any
     _recordCurrentWatchSignal();
+    _acceptPlayerEvents = false;
+    unawaited(_playerService.stop());
+    _position = Duration.zero;
+    _duration = Duration(seconds: video.durationSeconds);
+    _buffered = Duration.zero;
+    _aspectRatio = 16 / 9;
+    _relatedVideos = [];
+    _currentSubtitle = null;
+    _activeCaptionText = null;
+    _retryAttempts = 0;
 
     // 2. SYNCHRONOUS: Instantly update state so Watch Screen opens immediately
     _currentVideoItem = video;
@@ -234,6 +275,18 @@ class TubePlayerProvider extends ChangeNotifier {
     _isPlayerVisible = true;
     if (expand) _isExpanded = true;
     _videoStartTime = DateTime.now();
+    if (video.isMembersOnly) {
+      ++_playGeneration;
+      _status = TubePlayerStatus.paused;
+      _videoStartTime = null;
+      _position = Duration.zero;
+      _duration = Duration(seconds: video.durationSeconds);
+      _subtitleService.clearTrack();
+      _activeCaptionText = null;
+      notifyListeners();
+      await _playerService.pause();
+      return;
+    }
     notifyListeners();
 
     // Check for saved resume position if none explicitly passed
@@ -242,19 +295,21 @@ class TubePlayerProvider extends ChangeNotifier {
       final history = _storageService.getHistoryItem(video.id);
       if (history != null && history.isResumeAvailable) {
         resumeMs = history.positionMs;
-        _log('Resuming "${video.title}" from ${history.formattedResumePosition}');
+        _log(
+            'Resuming "${video.title}" from ${history.formattedResumePosition}');
       }
     }
 
     // 3. Asynchronously resolve stream in the background
-    await resolveAndPlay(video.id, startPositionMs: resumeMs);
-
-    // 4. Fetch related videos in background
+    // Recommendations load independently of extraction and the first frame.
     _loadRelatedVideos(video);
+    await resolveAndPlay(video.id,
+        startPositionMs: video.isLive ? 0 : resumeMs);
   }
 
   /// Plays a locally downloaded video without network extraction.
-  Future<void> playOfflineVideo(TubeVideoItem video, TubeVideoStream stream) async {
+  Future<void> playOfflineVideo(
+      TubeVideoItem video, TubeVideoStream stream) async {
     const MethodChannel('com.shreyx.tube/shorts_player_channel')
         .invokeMethod('stop')
         .catchError((_) {});
@@ -277,7 +332,12 @@ class TubePlayerProvider extends ChangeNotifier {
   }
 
   /// Resolves and plays arbitrary YouTube URL or 11-char ID.
-  Future<void> resolveAndPlay(String rawUrlOrId, {String? targetQuality, int startPositionMs = 0}) async {
+  Future<void> resolveAndPlay(String rawUrlOrId,
+      {String? targetQuality, int startPositionMs = 0}) async {
+    final generation = ++_playGeneration;
+    _acceptPlayerEvents = false;
+    final requestedId = _resolver.extractVideoId(rawUrlOrId);
+    if (isMembersOnly && _currentVideoItem?.id == requestedId) return;
     _lastRawInput = rawUrlOrId;
     _status = TubePlayerStatus.resolvingStream;
     _errorMessage = null;
@@ -286,11 +346,15 @@ class TubePlayerProvider extends ChangeNotifier {
     try {
       _log('Resolving YouTube video: $rawUrlOrId');
       final resolved = await _resolver.resolve(rawUrlOrId);
+      if (generation != _playGeneration) return;
+      if (_disposed) return;
       _resolvedVideo = resolved;
       _duration = Duration(seconds: resolved.durationSeconds);
       _log('Extraction OK: "${resolved.title}" by ${resolved.uploader}');
 
-      if (_currentVideoItem == null || _currentVideoItem!.id != resolved.videoId) {
+      final openedFromUrl = _currentVideoItem == null ||
+          _currentVideoItem!.id != resolved.videoId;
+      if (openedFromUrl) {
         _currentVideoItem = TubeVideoItem(
           id: resolved.videoId,
           title: resolved.title,
@@ -298,8 +362,23 @@ class TubePlayerProvider extends ChangeNotifier {
           channelId: '',
           thumbnailUrl: resolved.thumbnailUrl,
           durationSeconds: resolved.durationSeconds,
+          isLive: resolved.isLive,
         );
       }
+      _currentVideoItem = _currentVideoItem!.copyWith(
+        channelTitle: resolved.uploader,
+        channelId: RegExp(r'/channel/(UC[\w-]+)')
+                .firstMatch(resolved.uploaderUrl)
+                ?.group(1) ??
+            _currentVideoItem!.channelId,
+        channelAvatarUrl: resolved.uploaderAvatarUrl.isNotEmpty
+            ? resolved.uploaderAvatarUrl
+            : _currentVideoItem!.channelAvatarUrl,
+        isLive: resolved.isLive,
+      );
+      _isPlayerVisible = true;
+      _isExpanded = true;
+      if (openedFromUrl) _loadRelatedVideos(_currentVideoItem!);
 
       final qualityToUse = targetQuality ?? _selectedQuality;
       final stream = resolved.getBestStream(qualityToUse);
@@ -316,8 +395,24 @@ class TubePlayerProvider extends ChangeNotifier {
       _status = TubePlayerStatus.preparingPlayer;
       notifyListeners();
 
-      await _applyStream(stream, startPosition: Duration(milliseconds: startPositionMs));
+      await _applyStream(stream,
+          startPosition: Duration(milliseconds: startPositionMs));
     } catch (e) {
+      if (generation != _playGeneration) return;
+      if (e is TubeMembersOnlyException) {
+        final existing = _currentVideoItem;
+        await playVideo(existing?.id == requestedId
+            ? existing!.copyWith(isMembersOnly: true)
+            : TubeVideoItem(
+                id: requestedId,
+                title: 'Members-only video',
+                channelTitle: '',
+                channelId: '',
+                isMembersOnly: true,
+                thumbnailUrl:
+                    'https://i.ytimg.com/vi/$requestedId/hqdefault.jpg'));
+        return;
+      }
       _status = TubePlayerStatus.error;
       _errorMessage = e.toString().replaceFirst('Exception: ', '');
       _log('Resolution error: $_errorMessage');
@@ -325,14 +420,17 @@ class TubePlayerProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _applyStream(TubeVideoStream stream, {Duration startPosition = Duration.zero, bool autoPlay = true}) async {
+  Future<void> _applyStream(TubeVideoStream stream,
+      {Duration startPosition = Duration.zero, bool autoPlay = true}) async {
     // Central Player Ownership: Ensure Shorts is stopped
     const MethodChannel('com.shreyx.tube/shorts_player_channel')
         .invokeMethod('stop')
         .catchError((_) {});
 
     _currentStream = stream;
-    _log('Applying stream: ${stream.resolution} (${stream.container}/${stream.codec}, ${stream.deliveryMethod})');
+    _acceptPlayerEvents = true;
+    _log(
+        'Applying stream: ${stream.resolution} (${stream.container}/${stream.codec}, ${stream.deliveryMethod})');
 
     final success = await _playerService.loadStream(
       stream,
@@ -362,8 +460,10 @@ class TubePlayerProvider extends ChangeNotifier {
     if (targetStream != null && targetStream != _currentStream) {
       final currentPos = _position;
       final wasPlaying = isPlaying;
-      _log('Switching quality to $qualityLabel (preserving position ${currentPos.inSeconds}s, autoPlay: $wasPlaying)');
-      await _applyStream(targetStream, startPosition: currentPos, autoPlay: wasPlaying);
+      _log(
+          'Switching quality to $qualityLabel (preserving position ${currentPos.inSeconds}s, autoPlay: $wasPlaying)');
+      await _applyStream(targetStream,
+          startPosition: currentPos, autoPlay: wasPlaying);
     }
     notifyListeners();
   }
@@ -373,16 +473,21 @@ class TubePlayerProvider extends ChangeNotifier {
   // =========================================================================
 
   Future<void> _reResolveAndResume(Duration resumePosition) async {
-    if (_lastRawInput.isEmpty) return;
+    if (_lastRawInput.isEmpty || isMembersOnly) return;
+    final generation = _playGeneration;
     try {
       _log('Re-extracting fresh stream tokens for $_lastRawInput...');
-      final resolved = await _resolver.resolve(_lastRawInput);
+      final resolved =
+          await _resolver.resolve(_lastRawInput, forceRefresh: true);
+      if (generation != _playGeneration || isMembersOnly) return;
       _resolvedVideo = resolved;
       final stream = resolved.getBestStream(_selectedQuality);
       if (stream != null) {
-        await _applyStream(stream, startPosition: resumePosition, autoPlay: true);
+        await _applyStream(stream,
+            startPosition: resumePosition, autoPlay: true);
       }
     } catch (e) {
+      if (generation != _playGeneration || isMembersOnly) return;
       _status = TubePlayerStatus.error;
       _errorMessage = 'Stream auto-recovery failed. Tap Retry.';
       _log('Auto-recovery exception: $e');
@@ -393,7 +498,11 @@ class TubePlayerProvider extends ChangeNotifier {
   void retry() {
     _retryAttempts = 0;
     if (_currentVideoItem != null) {
-      resolveAndPlay(_currentVideoItem!.id, startPositionMs: _position.inMilliseconds);
+      _resolver.invalidateCache(_currentVideoItem!.id);
+    }
+    if (_currentVideoItem != null) {
+      resolveAndPlay(_currentVideoItem!.id,
+          startPositionMs: _position.inMilliseconds);
     } else if (_lastRawInput.isNotEmpty) {
       resolveAndPlay(_lastRawInput);
     }
@@ -403,7 +512,10 @@ class TubePlayerProvider extends ChangeNotifier {
   // PLAYBACK CONTROLS
   // =========================================================================
 
-  void play() => _playerService.play();
+  void play() {
+    if (!isMembersOnly) _playerService.play();
+  }
+
   void pause() => _playerService.pause();
 
   void togglePlayPause() {
@@ -420,8 +532,11 @@ class TubePlayerProvider extends ChangeNotifier {
 
   void seek(Duration position) => seekTo(position);
 
+  void goLive() => _playerService.seekToLive();
+
   void seekRelative(int seconds) {
-    final newSecs = (_position.inSeconds + seconds).clamp(0, _duration.inSeconds);
+    final newSecs =
+        (_position.inSeconds + seconds).clamp(0, _duration.inSeconds);
     seekTo(Duration(seconds: newSecs));
   }
 
@@ -495,8 +610,10 @@ class TubePlayerProvider extends ChangeNotifier {
   }
 
   void closePlayer() {
+    ++_playGeneration;
+    _acceptPlayerEvents = false;
     _recordCurrentWatchSignal();
-    _playerService.pause();
+    _playerService.stop();
     exitFullscreen();
     _isPlayerVisible = false;
     _isExpanded = false;
@@ -515,11 +632,14 @@ class TubePlayerProvider extends ChangeNotifier {
     _isLoadingRelated = true;
     notifyListeners();
     try {
-      _relatedVideos = await _homeFeedService.getRelatedVideos(video);
+      final related = await _homeFeedService.getRelatedVideos(video);
+      if (_currentVideoItem?.id == video.id && !_disposed) {
+        _relatedVideos = related;
+      }
     } catch (e) {
       _log('Error loading related: $e');
     } finally {
-      _isLoadingRelated = false;
+      if (_currentVideoItem?.id == video.id) _isLoadingRelated = false;
       notifyListeners();
     }
   }
@@ -551,7 +671,12 @@ class TubePlayerProvider extends ChangeNotifier {
   }
 
   void reorderQueue(int oldIndex, int newIndex) {
-    if (oldIndex < 0 || oldIndex >= _queue.length || newIndex < 0 || newIndex > _queue.length) return;
+    if (oldIndex < 0 ||
+        oldIndex >= _queue.length ||
+        newIndex < 0 ||
+        newIndex > _queue.length) {
+      return;
+    }
     if (oldIndex < newIndex) {
       newIndex -= 1;
     }
@@ -590,9 +715,13 @@ class TubePlayerProvider extends ChangeNotifier {
   }
 
   void _recordCurrentWatchSignal() {
-    if (_currentVideoItem == null || _videoStartTime == null) return;
+    if (_currentVideoItem == null || isMembersOnly || _videoStartTime == null) {
+      return;
+    }
     final watchSecs = DateTime.now().difference(_videoStartTime!).inSeconds;
-    final durSecs = _duration.inSeconds > 0 ? _duration.inSeconds : _currentVideoItem!.durationSeconds;
+    final durSecs = _duration.inSeconds > 0
+        ? _duration.inSeconds
+        : _currentVideoItem!.durationSeconds;
     final ratio = durSecs > 0 ? (watchSecs / durSecs).clamp(0.0, 1.0) : 0.0;
     final isFastSkip = watchSecs < 15 && ratio < 0.15;
     final history = _storageService.getHistoryItem(_currentVideoItem!.id);
@@ -643,11 +772,12 @@ class TubePlayerProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    ++_playGeneration;
     _recordCurrentWatchSignal();
     for (final s in _subscriptions) {
       s.cancel();
     }
-    _playerService.dispose();
     super.dispose();
   }
 }

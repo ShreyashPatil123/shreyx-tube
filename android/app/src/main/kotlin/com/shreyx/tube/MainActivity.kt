@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.cancel
 
 class MainActivity : FlutterActivity() {
 
@@ -81,6 +82,14 @@ class MainActivity : FlutterActivity() {
                     bridge.seekTo(pos)
                     result.success(true)
                 }
+                "seekToLive" -> {
+                    bridge.seekToLive()
+                    result.success(true)
+                }
+                "stop" -> {
+                    bridge.stop()
+                    result.success(true)
+                }
                 "setSpeed" -> {
                     val speed = (call.argument<Double>("speed"))?.toFloat() ?: 1.0f
                     bridge.setSpeed(speed)
@@ -148,6 +157,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        scope.cancel()
         super.onDestroy()
         playerBridge?.release()
         playerBridge = null

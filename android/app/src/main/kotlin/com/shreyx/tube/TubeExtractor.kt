@@ -144,6 +144,7 @@ object TubeExtractor {
                 "uploaderUrl" to (info.uploaderUrl ?: ""),
                 "uploaderAvatarUrl" to (info.uploaderAvatars?.firstOrNull()?.url ?: ""),
                 "durationSeconds" to info.duration,
+                "isLive" to (info.streamType.name == "LIVE_STREAM" || info.streamType.name == "AUDIO_LIVE_STREAM"),
                 "viewCount" to info.viewCount,
                 "description" to (info.description?.content ?: ""),
                 "thumbnailUrl" to (info.thumbnails?.maxByOrNull { it.height }?.url ?: ""),
